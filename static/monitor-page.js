@@ -9,14 +9,14 @@ async function loadLEDOverview(){try{const r=await fetch('/api/led'),data=await 
 
 let switchingMode=false;
 function paintControllerMode(){
- const m=artnetState?.controllerMode,box=document.querySelector('#controller-modes');if(!box)return;
- const status=document.querySelector('#controller-mode-status'),detail=document.querySelector('#controller-mode-detail');
- status.textContent=m?`${m.connection} · ${m.mode} · TX ${m.tx}`:'UNKNOWN · TX STOP';
+ const m=artnetState?.controllerMode,box=document.querySelector('#controller-controls');if(!box)return;
+ const status=box.querySelector('#controller-mode-status');
+ const applying=switchingMode||m?.busy||m?.phase==='APPLYING';
+ status.textContent=applying?'APPLYING':m?.connection==='ONLINE'?`TX ${m.tx}`:m?.connection==='OFFLINE'?'TX STOP':'CHECKING';
  for(const [id,name] of [['#mode-software','SOFTWARE CONTROL'],['#mode-bypass','DIRECT BYPASS']]){
   const b=document.querySelector(id);b.classList.toggle('primary',m?.mode===name);b.setAttribute('aria-pressed',String(m?.mode===name));
   b.disabled=switchingMode||!m||m.busy||m.connection==='OFFLINE'||m.mode===name;
   b.onclick=async()=>{switchingMode=true;paintControllerMode();try{await post('/api/artnet/mode',{mode:name});toast('Controller configuration read back: '+name);}catch(e){toast(e.message);}finally{switchingMode=false;await updateArtNet();}};
  }
- detail.textContent=m?.error|| (m?.ports?.length?m.ports.map(p=>`DMX${p.port} ${p.direction} U${p.universe}`).join(' · '):'Waiting for verified configuration.');
  const resume=document.querySelector('#blackout-tx');if(resume&&artnetState?.txMuted)resume.disabled=!m||!m.fresh||m.mode!=='SOFTWARE CONTROL'||m.busy||switchingMode;
 }

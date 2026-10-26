@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""SiteFlow local inventory and Art-Net monitor. Only explicit mapped-fixture sequence tests."""
-from fixtures import initial_patch, validate_fixture, PRESETS, prepare_fixture_update
+"""SiteFlow local inventory, Art-Net input routing, and explicitly operated fixture controls."""
+from fixtures import initial_patch, validate_fixture, PRESETS, prepare_fixture_update, ensure_beam230_patch
 from input_controls import initial_controls, validate_control, FADER_FUNCTIONS
 from led_controls import defaults as led_defaults,virtual_fixture,validate_mapping,controller_frames,LEDRuntime
 import argparse
 import concurrent.futures
+import copy
 import datetime as dt
 import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -20,10 +21,16 @@ import subprocess
 import threading
 import time
 import urllib.parse
+import webbrowser
 import xml.etree.ElementTree as ET
 from artnet_monitor import ArtNetMonitor
 from artnet_log import ArtNetLog
 from controller_modes import ControllerModes
+from local_devices import discover_local_devices
+from midi_monitor import snapshot as midi_snapshot, wait_events as wait_midi_events
+from midi_controls import remove_control as remove_midi_control, restore_control as restore_midi_control
+from traktor_template import load_template as load_traktor_template, merge_template as merge_traktor_template
+from midi_inputs import MIDIInputs, validate_section as validate_midi_section
 
 ROOT = Path(__file__).resolve().parent
 LOCK = threading.RLock()
@@ -35,20 +42,94 @@ PORTS = (80, 443, 8080, 8081, 6668, 554, 37777, 22)
 MONITOR = ArtNetMonitor()
 LED = LEDRuntime()
 CONTROLLER = None
+MIDI_INPUTS = MIDIInputs()
+MIDI_CONFIG_KEY = None
+
+
+def refresh_midi_inputs():
+    global MIDI_CONFIG_KEY
+    with LOCK:
+        banks=STATE.get('midiInputSections',{})
+        devices=[d for d in STATE.get('devices',[]) if d.get('kind')=='midi' or d.get('deviceClass')=='midi']
+        config_key=(tuple((k,id(v)) for k,v in banks.items()),tuple((d['id'],d.get('midiRevision',0)) for d in devices))
+        if config_key==MIDI_CONFIG_KEY:return
+        copied_banks=copy.deepcopy(banks);copied_devices=copy.deepcopy(devices)
+        MIDI_CONFIG_KEY=config_key
+    MIDI_INPUTS.configure(copied_banks,copied_devices)
+
+
+def midi_patch(device_id):
+    io=controller_io()
+    fixtures=effective_fixtures(STATE.get('fixtureMaps',{}).get(device_id,initial_patch(device_id)),io)
+    fixtures+=led_virtuals()+wiz_virtual_fixtures(STATE.get('devices',[]),io['outputUniverse'] if io else 1)
+    return fixtures
+
+
+def midi_source_cards(controller_id):
+    status=midi_snapshot().get('status',{});ports=status.get('ports',[])
+    snapshot=MIDI_INPUTS.snapshot();sections=STATE.get('midiInputSections',{}).get(controller_id,[])
+    return [dict(id=d['id'],name=d.get('name','MIDI device'),kind='midi',
+                 online=d.get('midiTemplate',{}).get('source') in ports,
+                 mappedControls=len(d.get('midiControls',[])),sections=sum(s['sourceId']==d['id'] for s in sections),
+                 activity=snapshot['activity'].get(d['id'],[]))
+            for d in STATE.get('devices',[]) if d.get('kind')=='midi' or d.get('deviceClass')=='midi']
 
 
 def import_led_registry():
     STATE.setdefault('ledFixtures',led_defaults())
+    for f in STATE['ledFixtures']:
+        if f['id']=='led:matrix':
+            f.setdefault('renderMode','pixel-fill');f.setdefault('reverse',False)
     for ip,name in [('192.168.18.3','LED Strips · P1–P4'),('192.168.18.157','Vertical LED Matrix')]:
         d=next((d for d in STATE['devices'] if d['ip']==ip),None)
         if not d:
             d=identify(ip,'');d['name']=name;STATE['devices'].append(d)
         if d['name'] in ('LED ArtNet','Device 3'):d['name']=name
-        d.update(kind='artnet_led',role='Art-Net pixel controller',model='SP801E profile · hardware unverified',tracked=True)
+        d.update(kind='artnet_led',role='Art-Net pixel controller',model='SP801E profile · hardware unverified')
+        if not d.get('trackedAt'):
+            d['tracked'] = False
         d['nextStep']='Imported from rc6. Use LED Controls; output remains off until enabled or assigned to an input.'
+    for d in STATE['devices']:
+        if d.get('kind') == 'host' and not d.get('trackedAt'):
+            d['tracked'] = False
     save()
 
 def led_virtuals():return [virtual_fixture(f) for f in STATE.get('ledFixtures',[])]
+
+def controller_io():
+    """Return the verified physical input/output patch without changing hardware."""
+    if CONTROLLER is None:return None
+    status=CONTROLLER.snapshot()
+    inputs=[p for p in status.get('ports',[]) if p.get('direction')=='Input']
+    outputs=[p for p in status.get('ports',[]) if p.get('direction')=='Output']
+    if status.get('connection')!='ONLINE' or not status.get('fresh') or len(inputs)!=1 or len(outputs)!=1:return None
+    return dict(inputPort=inputs[0]['port'],inputUniverse=inputs[0]['universe'],
+                outputPort=outputs[0]['port'],outputUniverse=outputs[0]['universe'])
+
+def effective_controls(items,io):
+    result=json.loads(json.dumps(items))
+    if io:
+        for control in result:control['universe']=io['inputUniverse']
+    return result
+
+def effective_fixtures(items,io):
+    result=json.loads(json.dumps(items))
+    if io:
+        for fixture in result:fixture['universe']=io['outputUniverse']
+    return result
+
+def wiz_virtual_fixtures(devices,universe):
+    """Expose paired WiZ lights as virtual PAR LED targets, never DMX addresses."""
+    # PAR LED semantic controls are approximated in software for RGB WiZ lamps.
+    roles=['Master','Red','Green','Blue','White','Amber','UV','Strobe']
+    result=[]
+    for device in devices:
+        if device.get('kind')!='wiz' or not device.get('id') or not device.get('ip'):continue
+        result.append(dict(id='wiz-'+str(device['id']).replace(':','').lower(),deviceId=device['id'],
+                           name=device.get('name') or 'WiZ light',universe=universe,start=1,
+                           mappingPreset='wiz-parled',virtualWiz=True,
+                           channels=[dict(function=role,default=0) for role in roles]))
+    return result
 
 def now():
     return dt.datetime.now(dt.timezone.utc).isoformat()
@@ -117,7 +198,7 @@ def identify(ip, mac):
             kind = name
             break
     return dict(id=mac or 'ip-' + ip, ip=ip, mac=mac, manufacturer=vendor,
-                name='Device ' + ip.rsplit('.', 1)[1], kind=kind,
+                name='Device ' + ip.rsplit('.', 1)[1], kind=kind, interface='network', deviceClass='network', present=False,
                 model='', firmware='', vendorId='', role='Unidentified device',
                 zone='', notes='', tracked=False, confidence='Vendor hint',
                 privateMac=private_mac, reachability='Unknown', access='Unverified',
@@ -134,6 +215,15 @@ def save():
     os.replace(str(temp), str(STATE_FILE))
 
 
+def finish_beam_lamp_action(fixture_id, started_at, action):
+    with LOCK:
+        item=STATE.setdefault('beamLampStates',{}).get(fixture_id,{})
+        if item.get('startedAt')!=started_at:return
+        item['phase']={'safe-off':'off-sent','lamp-on':'ignition-wait','lamp-reset':'reset-sent'}[action]
+        item['actionUntil']=None
+        save()
+
+
 def event(message, level='info'):
     STATE['events'].insert(0, dict(time=now(), message=message, level=level))
     del STATE['events'][100:]
@@ -143,14 +233,16 @@ def load():
     global STATE
     if STATE_FILE.exists():
         STATE = json.loads(STATE_FILE.read_text(encoding='utf-8'))
+        STATE.setdefault('knownOrder', [])
         STATE['scan']['running'] = False
         STATE['scan']['message'] = 'Ready for a fresh check'
         for d in STATE['devices']:
+            d['present'] = bool(d.get('connected')) if d.get('interface') in ('usb', 'bluetooth') else False
             if d.get('reachability') == 'Online':
                 d['reachability'] = 'Stale'
         return
     seeded = json.loads((ROOT / 'seed.json').read_text(encoding='utf-8'))
-    STATE = dict(devices=seeded, events=[], scan=dict(running=False, completed=0,
+    STATE = dict(devices=seeded, knownOrder=[], events=[], scan=dict(running=False, completed=0,
                  total=0, mode=None, message='No live scan in this session', lastCompleted=None),
                  network=dict(subnet='192.168.18.0/24', interface=NETWORK_INTERFACE, hostIp='192.168.18.6'))
     event('Imported observed devices. Availability requires a fresh response.')
@@ -180,20 +272,46 @@ def http_page(ip, port):
 
 def wiz_read(ip):
     results = {}
-    for method in ('getSystemConfig', 'getPilot'):
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-            sock.settimeout(1.3)
-            sock.sendto(json.dumps({'id': 1, 'method': method, 'params': {}}).encode(), (ip, 38899))
+    # Ask for both pieces of state in one round trip window; sequential UDP
+    # timeouts made a healthy lamp look unresponsive for several seconds.
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.settimeout(.7)
+        expected={'getSystemConfig','getPilot'}
+        for request_id,method in enumerate(sorted(expected),1):
+            sock.sendto(json.dumps({'id':request_id,'method':method,'params':{}}).encode(),(ip,38899))
+        deadline=time.monotonic()+.7
+        while expected:
+            sock.settimeout(max(.01,deadline-time.monotonic()))
+            try:
+                data,sender=sock.recvfrom(8192)
+                reply=json.loads(data);method=reply.get('method')
+                if sender[0]==ip and method in expected and isinstance(reply.get('result'),dict):
+                    results[method]={k:v for k,v in reply['result'].items()
+                                     if k in ('mac','moduleName','fwVersion','state','dimming','temp','r','g','b','sceneId')}
+                    expected.remove(method)
+            except (OSError,ValueError,TypeError):break
+    return results
+
+
+def wiz_command(ip, params, readback=True, wait_ack=True):
+    """Send one local WiZ setPilot command and optionally require fresh readback."""
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.settimeout(.7)
+        request = {'id': 1, 'method': 'setPilot', 'params': params}
+        sock.sendto(json.dumps(request, separators=(',', ':')).encode(), (ip, 38899))
+        if wait_ack:
             try:
                 data, sender = sock.recvfrom(8192)
                 reply = json.loads(data)
-                if sender[0] == ip and reply.get('method') == method and isinstance(reply.get('result'), dict):
-                    # Retain only device-level metadata and state, not home / location identifiers.
-                    results[method] = {k: v for k, v in reply['result'].items()
-                                       if k in ('mac', 'moduleName', 'fwVersion', 'state', 'dimming', 'temp', 'r', 'g', 'b', 'sceneId')}
-            except (OSError, ValueError, TypeError):
-                pass
-    return results
+                if sender[0] != ip or reply.get('method') != 'setPilot' or reply.get('error') or (isinstance(reply.get('result'), dict) and reply['result'].get('success') is False):
+                    raise ValueError('WiZ did not confirm the command')
+            except (OSError, ValueError, TypeError) as exc:
+                raise ValueError('WiZ command was not confirmed; check local control settings and connectivity') from exc
+    if not readback:return None
+    state = wiz_read(ip).get('getPilot')
+    if not state:
+        raise ValueError('Command sent, but WiZ state could not be read back')
+    return state
 
 
 def probe(original, subnet, host_ip):
@@ -276,21 +394,89 @@ def merge_result(result):
     with LOCK:
         current = next((d for d in STATE['devices'] if d['id'] == result['id']), None)
         if current:
-            for field in ('name', 'zone', 'notes', 'tracked', 'role'):
+            for field in ('name', 'zone', 'notes', 'tracked', 'trackedAt', 'deviceProfile', 'role'):
                 result[field] = current.get(field, result.get(field))
             current.update(result)
             if result.get('kind')=='artnet' and result.get('transportMac'):
                 STATE['devices'][:]=[d for d in STATE['devices'] if d is current or not (d['ip']==current['ip'] and d.get('mac')==result['transportMac'] and d.get('kind')=='artnet')]
 
 
+def dedupe_unknown_placeholders():
+    """Drop exact duplicate network identities and empty unknown placeholders."""
+    by_ip = {}
+    for device in STATE['devices']:
+        if device.get('ip'):
+            by_ip.setdefault(device['ip'], []).append(device)
+    removed = set()
+    for rows in by_ip.values():
+        identified = next((d for d in rows if d.get('mac')), None)
+        if not identified:
+            continue
+        same_identity = [d for d in rows if d.get('mac') == identified.get('mac')]
+        canonical = next((d for d in same_identity if d.get('id') == identified.get('mac')), identified)
+        for duplicate in same_identity:
+            if duplicate is canonical:
+                continue
+            for field in ('name', 'zone', 'notes', 'tracked', 'trackedAt', 'deviceProfile', 'role'):
+                value = duplicate.get(field)
+                if (field == 'tracked' and value) or (field != 'tracked' and value):
+                    if field in ('tracked', 'trackedAt', 'deviceProfile', 'role') or not canonical.get(field):
+                        canonical[field] = value
+            removed.add(duplicate['id'])
+        for placeholder in rows:
+            if placeholder is canonical or placeholder['id'] in removed or placeholder.get('mac') or placeholder.get('kind') != 'unknown':
+                continue
+            for field in ('name', 'zone', 'notes', 'tracked', 'trackedAt', 'deviceProfile', 'role'):
+                value = placeholder.get(field)
+                if field in ('tracked', 'trackedAt', 'deviceProfile', 'role'):
+                    if (field == 'tracked' and value) or (field != 'tracked' and value):
+                        identified[field] = value
+                elif value and value != 'Device ' + placeholder['ip'].rsplit('.', 1)[-1]:
+                    identified[field] = value
+            removed.add(placeholder['id'])
+    if removed:
+        STATE['devices'][:] = [d for d in STATE['devices'] if d.get('id') not in removed]
+        event('Merged duplicate unidentified network records by IP and MAC')
+
+
+def update_local_inventory():
+    """Refresh USB/Bluetooth inventory without probing or commanding devices."""
+    devices, supported = discover_local_devices()
+    if devices is None:
+        return None, 'USB/Bluetooth inventory could not be read.'
+    if not supported:
+        return 0, 'USB/Bluetooth inventory is unavailable on this platform.'
+    present = {d['id'] for d in devices}
+    with LOCK:
+        for result in devices:
+            result['present'] = bool(result.get('connected'))
+            current = next((d for d in STATE['devices'] if d['id'] == result['id']), None)
+            if current:
+                for field in ('name', 'zone', 'notes', 'tracked', 'trackedAt', 'deviceProfile', 'role'):
+                    result[field] = current.get(field, result.get(field))
+                current.update(result)
+            else:
+                STATE['devices'].append(result)
+                event('Discovered local ' + result['interface'].upper() + ' device · ' + result['name'])
+        for old in STATE['devices']:
+            if old.get('interface') in ('usb', 'bluetooth') and old['id'] not in present:
+                old.update(reachability='Stale', access='Disconnected', connected=False,
+                           present=False, checkedAt=now(), evidence=['No longer listed by the operating system.'])
+        STATE['scan']['localDevices'] = len(devices)
+    return len(devices), None
+
+
 def scan(mode='scan', device_id=None):
     try:
         subnet, host_ip = network()
         MONITOR.configure(subnet, host_ip)
+        local_count, local_warning = update_local_inventory()
         with LOCK:
+            STATE['scan']['peripheralWarning'] = local_warning
             STATE['network'] = dict(subnet=subnet, interface=NETWORK_INTERFACE, hostIp=host_ip)
             STATE['scan']['message'] = 'Discovering devices on ' + subnet if mode == 'scan' else 'Checking saved devices'
         live = set()
+        found_ips = set()
         if mode == 'scan':
             nmap = shutil.which('nmap') or '/opt/homebrew/bin/nmap'
             xml, code = run([nmap, '-sn', '-n', '--max-retries', '1', '-oX', '-', subnet], timeout=40)
@@ -304,26 +490,39 @@ def scan(mode='scan', device_id=None):
             with LOCK:
                 STATE['scan']['discoveryWarning'] = None if code == 0 else 'Discovery was incomplete. Neighbor observations and device checks are still included.'
             found = neighbors(subnet)
+            found_ips = set(found)
             with LOCK:
                 for ip, mac in found.items():
                     existing = next((d for d in STATE['devices'] if d['mac'] == mac), None)
                     if not existing:
                         existing = next((d for d in STATE['devices'] if d['ip']==ip and d.get('kind') in ('artnet','artnet_led')),None)
+                    if not existing:
+                        existing = next((d for d in STATE['devices'] if d['ip']==ip and not d.get('mac') and d.get('kind')=='unknown'),None)
                     if existing:
                         existing['ip'] = ip
+                        existing['mac'] = mac
+                        existing['present'] = True
                         existing['neighborObservedAt'] = now()
                     else:
                         d = identify(ip, mac)
+                        d['present'] = True
                         d['neighborObservedAt'] = now()
                         STATE['devices'].append(d)
                         event('Discovered ' + ip + ' · ' + d['manufacturer'])
+                dedupe_unknown_placeholders()
                 for ip in live:
                     if valid_target(ip, subnet) and not any(d['ip'] == ip for d in STATE['devices']):
-                        STATE['devices'].append(identify(ip, ''))
+                        d = identify(ip, '')
+                        d['present'] = True
+                        STATE['devices'].append(d)
         with LOCK:
-            targets = [dict(d) for d in STATE['devices'] if device_id is None or d['id'] == device_id]
             # A saved IP now owned by a different MAC must never be probed as the old identity.
             current_neighbors = neighbors(subnet)
+            present_ips = set(live) | found_ips | set(current_neighbors)
+            for d in STATE['devices']:
+                if d.get('interface') not in ('usb', 'bluetooth'):
+                    d['present'] = d.get('kind') == 'host' or d['ip'] in present_ips
+            targets = [dict(d) for d in STATE['devices'] if d.get('interface') not in ('usb', 'bluetooth') and (device_id is None or d['id'] == device_id)]
             conflicts = set()
             for d in targets:
                 actual = current_neighbors.get(d['ip'])
@@ -337,7 +536,7 @@ def scan(mode='scan', device_id=None):
                                 continue
                         except Exception:
                             pass
-                    d.update(reachability='Stale', access='Identity conflict', webUrl=None, ports=[],
+                    d.update(reachability='Stale', access='Identity conflict', webUrl=None, ports=[], present=False,
                              checkedAt=now(), evidence=['Saved IP now has a different MAC.'],
                              nextStep='Reconcile the saved identity with the current network neighbor.')
                     merge_result(d)
@@ -349,6 +548,7 @@ def scan(mode='scan', device_id=None):
             for task in concurrent.futures.as_completed(tasks):
                 try:
                     result = task.result()
+                    result['present'] = result.get('reachability') == 'Online' or result['ip'] in present_ips
                     if result['ip'] in live and result['reachability'] == 'Unreachable':
                         result.update(reachability='Online', lastSeen=now())
                         result['evidence'].append('Fresh discovery probe responded; application access remains unverified.')
@@ -360,7 +560,7 @@ def scan(mode='scan', device_id=None):
                     STATE['scan']['completed'] += 1
         with LOCK:
             STATE['scan'].update(lastCompleted=now(), message='Local access check completed')
-            event(('Network scan' if mode == 'scan' else 'Status check') + ' completed. No output commands were sent.')
+            event(('Network scan' if mode == 'scan' else 'Status check') + ' completed · USB/Bluetooth: ' + str(local_count if local_count is not None else 'unavailable') + '. No output commands were sent.')
     except Exception as exc:
         with LOCK:
             STATE['scan']['message'] = str(exc)
@@ -403,9 +603,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Content-Length', str(len(body)))
         self.send_header('Cache-Control', 'no-store')
         self.send_header('X-Content-Type-Options', 'nosniff')
-        self.send_header('X-Frame-Options', 'DENY')
+        embedded=urllib.parse.urlsplit(self.path).path=='/midi' and urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get('embed')==['1']
+        self.send_header('X-Frame-Options', 'SAMEORIGIN' if embedded else 'DENY')
         self.send_header('Referrer-Policy', 'no-referrer')
-        self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+        self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors "+("'self'" if embedded else "'none'")+"; base-uri 'none'; form-action 'self'")
         for k, v in (extra or {}).items():
             self.send_header(k, v)
         self.end_headers()
@@ -418,16 +619,75 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/led':
             with LOCK:
                 return self.reply({'fixtures':STATE.get('ledFixtures',[]),'virtualFixtures':led_virtuals(),'runtime':LED.manual,'effectiveValues':LED.last_values,'status':LED.status,'txMuted':MONITOR.tx_muted})
+        if path == '/api/wiz':
+            device_id=urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get('device',[''])[0]
+            with LOCK: device=next((dict(d) for d in STATE['devices'] if d['id']==device_id and d.get('kind')=='wiz'),None)
+            if not device:return self.reply({'error':'WiZ device not found'},404)
+            data=wiz_read(device['ip']); config=data.get('getSystemConfig',{}); state=data.get('getPilot')
+            mac=lambda value:str(value or '').replace(':','').lower()
+            if config.get('mac') and device.get('mac') and mac(config['mac'])!=mac(device['mac']):return self.reply({'error':'WiZ identity conflict; control disabled'},409)
+            if not state:return self.reply({'error':'WiZ is offline or local control is disabled'},503)
+            with LOCK:
+                current=next((d for d in STATE['devices'] if d['id']==device_id and d.get('kind')=='wiz'),None)
+                if current:current.update(reachability='Online',access='Local API',lastSeen=now(),present=True,
+                                           state=state,confidence='Protocol response',
+                                           model=config.get('moduleName',current.get('model','')),
+                                           firmware=config.get('fwVersion',current.get('firmware','')))
+            return self.reply({'device':device,'state':state,'online':True})
+        if path == '/api/midi':
+            params=urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            device_id=params.get('device',[''])[0]
+            try:after=float(params.get('after',['0'])[0])
+            except ValueError:after=0
+            with LOCK:
+                stored=next((d for d in STATE.get('devices',[]) if d.get('id')==device_id and (d.get('deviceClass')=='midi' or d.get('kind')=='midi')),None)
+                if not stored:return self.reply({'error':'MIDI device not found in the local inventory'},404)
+                revision=stored.get('midiRevision',0)
+                include_config=params.get('revision',[''])[0]!=str(revision)
+                device=copy.deepcopy({key:value for key,value in stored.items()
+                                      if include_config or key not in ('midiControls','midiRemovedControls','midiTemplate')})
+                device['midiRevision']=revision
+            return self.reply({'device':device,**midi_snapshot(after)})
+        if path == '/api/midi-inputs':
+            params=urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            controller_id=params.get('device',[''])[0];source_id=params.get('source',[''])[0]
+            refresh_midi_inputs()
+            with LOCK:
+                controller=next((d for d in STATE['devices'] if d['id']==controller_id and d.get('kind')=='artnet'),None)
+                if not controller:return self.reply({'error':'Art-Net device not found'},404)
+                source=next((d for d in STATE['devices'] if d['id']==source_id and (d.get('kind')=='midi' or d.get('deviceClass')=='midi')),None)
+                token=str(STATE.get('midiInputRevision',0))+'/'+str(source.get('midiRevision',0) if source else 0)
+                result=dict(devices=midi_source_cards(controller_id),runtime=MIDI_INPUTS.snapshot(source_id) if source_id else None,
+                            configRevision=token,txAllowed=not MONITOR.tx_blocked())
+                if source and params.get('revision',[''])[0]!=token:
+                    fixtures=midi_patch(controller_id)
+                    roles=list(dict.fromkeys(FADER_FUNCTIONS+[ch['function'] for f in fixtures for ch in f['channels'] if ch['function'].casefold() not in ('unknown','unassigned')]))
+                    presets=[dict(id=p['id'],name=p['name'],functions=[p['channels'][i]['function'] if i<len(p['channels']) and p['channels'][i]['function'].casefold()!='unknown' else None for i in range(16)]) for p in STATE.get('fixturePresets',PRESETS)]
+                    presets.append(dict(id='led-matrix-pixel-fill',name='LED Matrix · Pixel Fill',functions=['Master','Red','Green','Blue','White']+[None]*11))
+                    result.update(source=copy.deepcopy(source),sections=copy.deepcopy([s for s in STATE.get('midiInputSections',{}).get(controller_id,[]) if s['sourceId']==source_id]),
+                                  fixtures=fixtures,functions=roles,presets=presets,controller=dict(id=controller_id,name=controller['name'],ip=controller['ip']))
+                return self.reply(result)
         if path == '/api/input-controls':
             device_id=urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get('device',[''])[0]
             with LOCK:
                 if not any(d['id']==device_id and d['kind']=='artnet' for d in STATE['devices']):return self.reply({'error':'Art-Net device not found'},404)
-                return self.reply({'controls':STATE.get('inputControls',{}).get(device_id,initial_controls(device_id)), 'transmissionEnabled':True,'faderFunctions':FADER_FUNCTIONS})
+                io=controller_io();items=STATE.get('inputControls',{}).get(device_id,initial_controls(device_id))
+                wiz_targets=wiz_virtual_fixtures(STATE.get('devices',[]),io['outputUniverse'] if io else 1)
+                return self.reply({'controls':effective_controls(items,io),'transmissionEnabled':True,
+                                   'inputUniverse':io['inputUniverse'] if io else None,
+                                   'outputUniverse':io['outputUniverse'] if io else None,
+                                   'faderFunctions':FADER_FUNCTIONS,'wizTargets':wiz_targets})
         if path == '/api/fixtures':
             device_id=urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get('device',[''])[0]
             with LOCK:
                 if not any(d['id']==device_id and d['kind']=='artnet' for d in STATE['devices']):return self.reply({'error':'Art-Net device not found'},404)
-                return self.reply({'fixtures':STATE.get('fixtureMaps',{}).get(device_id,initial_patch(device_id)), 'presets':STATE.get('fixturePresets',PRESETS)})
+                io=controller_io();items=effective_fixtures(STATE.get('fixtureMaps',{}).get(device_id,initial_patch(device_id)),io)
+                return self.reply({'fixtures':items,'presets':STATE.get('fixturePresets',PRESETS),
+                                   'inputUniverse':io['inputUniverse'] if io else None,
+                                   'outputUniverse':io['outputUniverse'] if io else None,
+                                   'fixtureControls':{k:copy.deepcopy(v) for k,v in MONITOR.fixture_controls.items()
+                                       if (v.get('manualUntil') or 0)>time.monotonic() or (v.get('actionDeadline') or 0)>time.monotonic()},
+                                   'beamLampStates':copy.deepcopy(STATE.get('beamLampStates',{}))})
         if path == '/api/artnet':
             snapshot=MONITOR.snapshot()
             snapshot['controllerMode']=CONTROLLER.snapshot() if CONTROLLER else None
@@ -487,8 +747,21 @@ class Handler(BaseHTTPRequestHandler):
                  '/led-controls.js': ('led-controls.js','text/javascript; charset=utf-8'),
                  '/input-controls': ('input-controls.html','text/html; charset=utf-8'),
                  '/input-controls.js': ('input-controls.js','text/javascript; charset=utf-8'),
+                 '/midi-input-cards.js': ('midi-input-cards.js','text/javascript; charset=utf-8'),
+                 '/midi-input': ('midi-input.html','text/html; charset=utf-8'),
+                 '/midi-input.js': ('midi-input.js','text/javascript; charset=utf-8'),
+                 '/traktor-icon.svg': ('traktor-icon.svg','image/svg+xml'),
                  '/fixtures': ('fixtures.html','text/html; charset=utf-8'),
                  '/fixtures.js': ('fixtures.js','text/javascript; charset=utf-8'),
+                 '/fixture': ('fixture.html','text/html; charset=utf-8'),
+                 '/fixture.js': ('fixture.js','text/javascript; charset=utf-8'),
+                 '/wiz': ('wiz.html','text/html; charset=utf-8'),
+                 '/wiz.js': ('wiz.js','text/javascript; charset=utf-8'),
+                 '/midi': ('midi.html','text/html; charset=utf-8'),
+                 '/midi.js': ('midi.js','text/javascript; charset=utf-8'),
+                 '/traktor-surface.js': ('traktor-surface.js','text/javascript; charset=utf-8'),
+                 '/assets/traktor/traktor-atlas-v1.png': ('assets/traktor/traktor-atlas-v1.png','image/png'),
+                 '/assets/traktor/brushed-black-v1.png': ('assets/traktor/brushed-black-v1.png','image/png'),
                  '/': ('index.html', 'text/html; charset=utf-8'),
                  '/Papinsvet-logo.png': ('Papinsvet-logo.png', 'image/png'),
                  '/artnet': ('artnet.html', 'text/html; charset=utf-8'),
@@ -508,12 +781,121 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply({'error': 'Invalid request token'}, 403)
         try:
             length = int(self.headers.get('Content-Length', '0'))
-            if length > (131072 if urllib.parse.urlsplit(self.path).path in ('/api/fixtures','/api/input-controls') else 8192) or length < 0:
+            if length > (131072 if urllib.parse.urlsplit(self.path).path in ('/api/fixtures','/api/input-controls','/api/midi-inputs/section') else 8192) or length < 0:
                 return self.reply({'error': 'Request too large'}, 413)
             data = json.loads(self.rfile.read(length) or b'{}')
             if not isinstance(data, dict):
                 raise ValueError('Invalid request')
             path = urllib.parse.urlsplit(self.path).path
+            if path == '/api/wiz/control':
+                device_id=data.get('deviceId')
+                with LOCK: device=next((dict(d) for d in STATE['devices'] if d['id']==device_id and d.get('kind')=='wiz'),None)
+                if not device:return self.reply({'error':'WiZ device not found'},404)
+                if not valid_target(device['ip'],STATE['network'].get('subnet','192.168.18.0/24')):return self.reply({'error':'Device is outside the current local network'},409)
+                try:
+                    current=wiz_read(device['ip']);config=current.get('getSystemConfig',{})
+                    mac=lambda value:str(value or '').replace(':','').lower()
+                    if not current.get('getPilot'):raise ValueError('WiZ is offline or local control is disabled')
+                    if config.get('mac') and device.get('mac') and mac(config['mac'])!=mac(device['mac']):raise ValueError('WiZ identity conflict; control disabled')
+                    action=data.get('action')
+                    if action=='off':params={'state':False}
+                    elif action=='on':params={'state':True}
+                    elif action=='values':
+                        brightness=data.get('brightness'); rgb=data.get('rgb'); temp=data.get('temp')
+                        if type(brightness) is not int or not 10<=brightness<=100:raise ValueError('Brightness must be 10–100%')
+                        params={'state':True,'dimming':brightness}
+                        if isinstance(rgb,list) and len(rgb)==3 and all(type(v) is int and 0<=v<=255 for v in rgb):params.update(dict(zip(('r','g','b'),rgb)))
+                        elif type(temp) is int and 2200<=temp<=6500:params['temp']=temp
+                        elif rgb is not None or temp is not None:raise ValueError('Use RGB values 0–255 or white temperature 2200–6500 K')
+                    else:raise ValueError('Select a WiZ control action')
+                    state=wiz_command(device['ip'],params)
+                except ValueError as exc:return self.reply({'error':str(exc)},409)
+                return self.reply({'accepted':True,'state':state})
+            if path == '/api/midi/template/import':
+                device_id=data.get('deviceId')
+                with LOCK:
+                    device=next((d for d in STATE.get('devices',[]) if d.get('id')==device_id and (d.get('deviceClass')=='midi' or d.get('kind')=='midi')),None)
+                    if not device:return self.reply({'error':'MIDI device not found'},404)
+                    if 's2' not in device.get('name','').lower() or 'mk2' not in device.get('name','').lower():
+                        return self.reply({'error':'Select the Traktor Kontrol S2 MK2'},400)
+                ports=midi_snapshot().get('status',{}).get('ports',[])
+                source=data.get('source')
+                if source not in ports or 'traktor' not in source.lower() or 's2' not in source.lower():
+                    return self.reply({'error':'Select the connected Traktor MIDI input first'},409)
+                template_path=Path.home()/'Library/Application Support/Native Instruments/Controller Editor/TraktorKontrolS2MK2.ncs'
+                if not template_path.is_file():template_path=ROOT/'profiles/traktor-s2-mk2.ncs'
+                try:
+                    labels=json.loads((ROOT/'profiles/traktor-surface-labels.json').read_text())
+                    records,profile=load_traktor_template(template_path,source,labels)
+                except (OSError,ValueError,ET.ParseError) as exc:
+                    return self.reply({'error':'Could not read Controller Editor template: '+str(exc)},409)
+                with LOCK:
+                    backups=STATE_FILE.parent/'midi-backups';backups.mkdir(parents=True,exist_ok=True)
+                    backup=backups/('s2-mk2-'+dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%S')+'-'+secrets.token_hex(4)+'.json')
+                    backup.write_text(json.dumps({key:device.get(key) for key in ('id','midiControls','midiRemovedControls','midiTemplate')},ensure_ascii=False,indent=2))
+                    merge_traktor_template(device,records,profile)
+                    device['midiRevision']=device.get('midiRevision',0)+1
+                    save()
+                    return self.reply({'controls':device['midiControls'],'template':profile,
+                                       'removedControls':device.get('midiRemovedControls',[]),'backup':backup.name})
+            if path == '/api/midi/controls':
+                device_id=data.get('deviceId');item=data.get('control')
+                if not isinstance(item,dict):return self.reply({'error':'MIDI control details are required'},400)
+                with LOCK:
+                    device=next((d for d in STATE.get('devices',[]) if d.get('id')==device_id and (d.get('deviceClass')=='midi' or d.get('kind')=='midi')),None)
+                    if not device:return self.reply({'error':'MIDI device not found in the local inventory'},404)
+                    name=str(item.get('name','')).strip();kind=item.get('type');channel=item.get('channel');number=item.get('number');minimum=item.get('min');maximum=item.get('max')
+                    if not name or len(name)>80:return self.reply({'error':'Control name must contain 1–80 characters'},400)
+                    if kind not in ('Control Change','Pitch Bend','Note'):return self.reply({'error':'Unsupported MIDI message type'},400)
+                    if type(channel) is not int or not 1<=channel<=16:return self.reply({'error':'MIDI channel must be 1–16'},400)
+                    if kind!='Pitch Bend' and (type(number) is not int or not 0<=number<=127):return self.reply({'error':'Controller or note number must be 0–127'},400)
+                    if kind=='Pitch Bend':number=None
+                    if type(minimum) is not int or type(maximum) is not int or minimum>maximum or minimum < (-8192 if kind=='Pitch Bend' else 0) or maximum>(8191 if kind=='Pitch Bend' else 127):return self.reply({'error':'Observed MIDI range is invalid'},400)
+                    controls=device.setdefault('midiControls',[])
+                    record=dict(name=name,type=kind,channel=channel,number=number,min=minimum,max=maximum,
+                                source=str(item.get('source',''))[:128],interpretation=str(item.get('interpretation',''))[:48],
+                                surfaceControlId=str(item.get('surfaceControlId',''))[:80],
+                                surfaceControlName=str(item.get('surfaceControlName',''))[:100],
+                                events=max(0,min(int(item.get('events',0)),1000000)),origin='learned',addedAt=now())
+                    existing=next((c for c in controls if c.get('type')==kind and c.get('channel')==channel and c.get('number')==number and c.get('source')==record['source']),None)
+                    if existing:existing.update(record)
+                    else:controls.append(record)
+                    device['midiRevision']=device.get('midiRevision',0)+1
+                    save()
+                    return self.reply({'controls':controls,'added':record})
+            if path in ('/api/midi/controls/remove','/api/midi/controls/restore'):
+                device_id=data.get('deviceId')
+                with LOCK:
+                    device=next((d for d in STATE.get('devices',[]) if d.get('id')==device_id and (d.get('deviceClass')=='midi' or d.get('kind')=='midi')),None)
+                    if not device:return self.reply({'error':'MIDI device not found'},404)
+                    try:
+                        if path.endswith('/remove'):
+                            identity=data.get('control')
+                            if not isinstance(identity,dict):return self.reply({'error':'Select a saved MIDI control'},400)
+                            changed=remove_midi_control(device,identity)
+                        else:changed=restore_midi_control(device,data.get('removalId'))
+                    except ValueError as exc:return self.reply({'error':str(exc)},409)
+                    device['midiRevision']=device.get('midiRevision',0)+1
+                    save()
+                    return self.reply({'controls':device.get('midiControls',[]),
+                                       'removedControls':device.get('midiRemovedControls',[]),'changed':changed})
+            if path == '/api/midi/assignment':
+                device_id=data.get('deviceId');identity=data.get('control')
+                if not isinstance(identity,dict):return self.reply({'error':'Select a saved MIDI control'},400)
+                role=data.get('functionRole');target=data.get('target')
+                if not isinstance(role,str) or not role.strip() or len(role)>80:return self.reply({'error':'Choose a system function'},400)
+                if target not in ('artnet','global') and (not isinstance(target,str) or len(target)>120):return self.reply({'error':'Choose a valid target'},400)
+                with LOCK:
+                    device=next((d for d in STATE.get('devices',[]) if d.get('id')==device_id and (d.get('deviceClass')=='midi' or d.get('kind')=='midi')),None)
+                    if not device:return self.reply({'error':'MIDI device not found'},404)
+                    controls=device.get('midiControls',[])
+                    control=next((c for c in controls if c.get('type')==identity.get('type') and c.get('channel')==identity.get('channel') and c.get('number')==identity.get('number') and c.get('source')==identity.get('source')),None)
+                    if not control:return self.reply({'error':'Save this learned control before assigning its function'},404)
+                    control.update(functionRole=role.strip(),target=target,
+                                   mappingName=str(data.get('mappingName','')).strip()[:80],assignedAt=now())
+                    device['midiRevision']=device.get('midiRevision',0)+1
+                    save()
+                    return self.reply({'saved':True,'control':control})
             if path == '/api/artnet/mode':
                 if CONTROLLER is None:return self.reply({'error':'Controller mode service unavailable'},503)
                 try:result=CONTROLLER.switch(data.get('mode'))
@@ -522,6 +904,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self.reply({'error':str(exc),'controllerMode':CONTROLLER.snapshot()},409)
                 with LOCK:
                     STATE['txMuted']=MONITOR.tx_muted;save()
+                MONITOR.wake_routing()
                 return self.reply(result)
             if path == '/api/led/mapping':
                 with LOCK:
@@ -535,6 +918,7 @@ class Handler(BaseHTTPRequestHandler):
                         patch=STATE.get('fixtureMaps',{}).get(did,initial_patch(did))+virtuals
                         controls[did]=[validate_control(c,bank,patch) for c in bank]
                     STATE.update(ledFixtures=candidate,inputControls=controls);LED.manual.pop(old['id'],None);save()
+                    MONITOR.wake_routing()
                     return self.reply({'fixtures':candidate})
             if path == '/api/led/control':
                 with LOCK:
@@ -543,34 +927,118 @@ class Handler(BaseHTTPRequestHandler):
                     if MONITOR.tx_muted:return self.reply({'error':'Blackout · resume TX first'},409)
                     LED.set_values(f,data.get('values'),data.get('enabled'))
                     return self.reply({'accepted':True})
+            if path == '/api/midi-inputs/section':
+                controller_id=data.get('deviceId');source_id=data.get('sourceId');action=data.get('action','save')
+                with LOCK:
+                    if not any(d['id']==controller_id and d.get('kind')=='artnet' for d in STATE['devices']):return self.reply({'error':'Art-Net device not found'},404)
+                    source=next((d for d in STATE['devices'] if d['id']==source_id and (d.get('kind')=='midi' or d.get('deviceClass')=='midi')),None)
+                    if not source:return self.reply({'error':'MIDI device not found'},404)
+                    banks=STATE.setdefault('midiInputSections',{});sections=list(banks.get(controller_id,[]))
+                    if action=='save':
+                        section=validate_midi_section(data.get('section'),sections,source.get('midiControls',[]),midi_patch(controller_id),source_id)
+                        sections=[s for s in sections if s['id']!=section['id']]+[section]
+                    elif action=='remove':
+                        section=next((s for s in sections if s['id']==data.get('sectionId') and s['sourceId']==source_id),None)
+                        if not section:return self.reply({'error':'MIDI section not found'},404)
+                        STATE.setdefault('midiRemovedSections',[]).append(dict(controllerId=controller_id,section=section,removedAt=now()))
+                        sections=[s for s in sections if s['id']!=section['id']]
+                    else:raise ValueError('Invalid MIDI section action')
+                    banks[controller_id]=sections;STATE['midiInputRevision']=STATE.get('midiInputRevision',0)+1;save()
+                refresh_midi_inputs();MONITOR.wake_routing()
+                return self.reply({'section':section,'sections':[s for s in sections if s['sourceId']==source_id]})
+            if path == '/api/midi-inputs/fader':
+                with LOCK:
+                    section=next((s for s in STATE.get('midiInputSections',{}).get(data.get('deviceId'),[]) if s['id']==data.get('sectionId') and s['sourceId']==data.get('sourceId')),None)
+                    if not section:return self.reply({'error':'MIDI section not found'},404)
+                refresh_midi_inputs();MIDI_INPUTS.manual(section['id'],data.get('fader'),data.get('value'));MONITOR.wake_routing()
+                return self.reply({'accepted':True,'runtime':MIDI_INPUTS.snapshot(section['sourceId'])})
             if path == '/api/input-controls':
                 with LOCK:
                     device_id=data.get('deviceId')
                     if not any(d['id']==device_id and d['kind']=='artnet' for d in STATE['devices']):return self.reply({'error':'Art-Net device not found'},404)
+                    io=controller_io()
                     maps=STATE.setdefault('inputControls',{})
-                    items=maps.get(device_id,initial_controls(device_id))
-                    fixtures=STATE.get('fixtureMaps',{}).get(device_id,initial_patch(device_id))+led_virtuals()
+                    items=copy.deepcopy(maps.get(device_id,initial_controls(device_id)))
+                    if io:
+                        for item in items:item['universe']=io['inputUniverse']
+                    fixtures=copy.deepcopy(STATE.get('fixtureMaps',{}).get(device_id,initial_patch(device_id)))
+                    if io:
+                        for item in fixtures:item['universe']=io['outputUniverse']
+                    fixtures+=led_virtuals()
+                    fixtures+=wiz_virtual_fixtures(STATE.get('devices',[]),io['outputUniverse'] if io else 1)
                     control=validate_control(data.get('control'),items,fixtures)
                     maps[device_id]=[control if c['id']==control['id'] else c for c in items] if any(c['id']==control['id'] for c in items) else items+[control]
                     save()
-                    return self.reply({'controls':maps[device_id],'transmissionEnabled':True,'faderFunctions':FADER_FUNCTIONS})
+                    MONITOR.wake_routing()
+                    io=controller_io()
+                    return self.reply({'controls':effective_controls(maps[device_id],io),'transmissionEnabled':True,
+                                       'inputUniverse':io['inputUniverse'] if io else None,
+                                       'outputUniverse':io['outputUniverse'] if io else None,
+                                       'faderFunctions':FADER_FUNCTIONS})
             if path == '/api/fixtures':
                 device_id=data.get('deviceId')
                 with LOCK:
                     if not any(d['id']==device_id and d['kind']=='artnet' for d in STATE['devices']):return self.reply({'error':'Art-Net device not found'},404)
-                    maps,presets,controls,affected=prepare_fixture_update(STATE,device_id,data.get('fixture'))
+                    io=controller_io()
+                    maps,presets,controls,affected=prepare_fixture_update(
+                        STATE,device_id,data.get('fixture'),
+                        io['inputUniverse'] if io else None,io['outputUniverse'] if io else None)
                     STATE.update(fixtureMaps=maps,fixturePresets=presets,inputControls=controls)
                     save()
-                    return self.reply({'fixtures':maps[device_id],'presets':presets,'affectedFixtures':affected})
+                    MONITOR.wake_routing()
+                    io=controller_io();items=effective_fixtures(maps[device_id],io)
+                    return self.reply({'fixtures':items,'presets':presets,'affectedFixtures':affected,
+                                       'inputUniverse':io['inputUniverse'] if io else None,
+                                       'outputUniverse':io['outputUniverse'] if io else None})
+            if path == '/api/fixtures/control':
+                device_id=data.get('deviceId')
+                action=data.get('action')
+                with LOCK:
+                    d=next((d for d in STATE['devices'] if d['id']==device_id and d['kind']=='artnet'),None)
+                    fixture=next((f for f in STATE.get('fixtureMaps',{}).get(device_id,initial_patch(device_id)) if f['id']==data.get('fixtureId')),None)
+                    io=controller_io()
+                    if not d or not fixture:return self.reply({'error':'Fixture not found'},404)
+                    if fixture.get('mappingPreset')!='beam230-16ch':return self.reply({'error':'Mouse control is available for the Beam 230 profile'},409)
+                    if not io or io['outputUniverse'] is None:return self.reply({'error':'Controller output configuration is unknown'},409)
+                    universe=io['outputUniverse'];fixture=copy.deepcopy(fixture);fixture['universe']=universe
+                    fixture_id=fixture['id'];lamp_states=STATE.setdefault('beamLampStates',{});lamp=lamp_states.setdefault(fixture_id,dict(phase='unknown',coolingUntil=None,actionUntil=None))
+                    now_epoch=time.time();phase=lamp.get('phase','unknown')
+                    if action=='lamp-stable':
+                        if phase!='ignition-wait':return self.reply({'error':'No pending ignition confirmation'},409)
+                        lamp.update(phase='on',stableConfirmedAt=now(),coolingUntil=None);save()
+                        return self.reply({'accepted':True,'lampState':copy.deepcopy(lamp),'physicalIgnitionConfirmed':False})
+                    if action not in (None,'safe-off','lamp-on','lamp-reset'):return self.reply({'error':'Unknown Beam lamp action'},400)
+                    if action in ('lamp-on','safe-off','lamp-reset') and (lamp.get('actionUntil') or 0)>now_epoch:return self.reply({'error':'Lamp command is still in progress'},409)
+                    if action=='lamp-reset':
+                        if data.get('confirmed') is not True:return self.reply({'error':'Manual reset requires explicit confirmation'},409)
+                try:
+                    result=MONITOR.set_fixture_control(d['ip'],fixture,data.get('mode','original'),data.get('values'),action,universe,data.get('colorSlots'))
+                except ValueError as exc:return self.reply({'error':str(exc)},409)
+                if action in ('safe-off','lamp-on','lamp-reset'):
+                    started=time.time()
+                    with LOCK:
+                        lamp=STATE.setdefault('beamLampStates',{}).setdefault(fixture_id,{})
+                        lamp.update(phase={'safe-off':'off-pulse','lamp-on':'on-pulse','lamp-reset':'reset-pulse'}[action],
+                                    action=action,startedAt=started,actionUntil=started+4,
+                                    coolingUntil=None,
+                                    stableConfirmedAt=None if action in ('safe-off','lamp-on') else lamp.get('stableConfirmedAt'))
+                        save();result['lampState']=copy.deepcopy(lamp)
+                    timer=threading.Timer(4,finish_beam_lamp_action,args=(fixture_id,started,action));timer.daemon=True;timer.start()
+                elif action is None:
+                    with LOCK:result['lampState']=copy.deepcopy(STATE.setdefault('beamLampStates',{}).get(fixture_id,{}))
+                MONITOR.wake_routing()
+                return self.reply(result)
             if path == '/api/input-controls/fader':
                 with LOCK:
                     device_id=data.get('deviceId')
                     d=next((d for d in STATE['devices'] if d['id']==device_id and d['kind']=='artnet'),None)
                     control=next((c for c in STATE.get('inputControls',{}).get(device_id,[]) if c['id']==data.get('controlId')),None)
                     if not d or not control:return self.reply({'error':'Input control not found'},404)
-                    ip=d['ip'];control=json.loads(json.dumps(control))
+                    ip=d['ip'];control=json.loads(json.dumps(control));io=controller_io()
+                    if io:control['universe']=io['inputUniverse']
                 try:override=MONITOR.set_manual_fader(ip,control,data.get('fader'),data.get('value'),data.get('expectedInput'),expected_offline=data.get('expectedInput') is None)
                 except ValueError as exc:return self.reply({'error':str(exc)},409)
+                MONITOR.wake_routing()
                 return self.reply({'override':override})
             if path == '/api/artnet/blackout':
                 enabled=data.get('enabled')
@@ -585,6 +1053,7 @@ class Handler(BaseHTTPRequestHandler):
                     MONITOR.blackout_status=result
                     with LOCK:
                         STATE['txMuted']=MONITOR.tx_muted;STATE['blackoutStatus']=result;save()
+                    MONITOR.wake_routing()
                     return self.reply(result)
                 if enabled:
                     with LOCK:
@@ -598,16 +1067,20 @@ class Handler(BaseHTTPRequestHandler):
                     STATE['txMuted']=enabled
                     if enabled:STATE['blackoutStatus']=result
                     save()
+                MONITOR.wake_routing()
                 return self.reply(result,409 if result.get('error') else 200)
             if path == '/api/fixtures/test':
                 with LOCK:
                     device_id=data.get('deviceId')
                     d=next((d for d in STATE['devices'] if d['id']==device_id and d['kind']=='artnet'),None)
                     if not d:return self.reply({'error':'Art-Net device not found'},404)
-                    items=json.loads(json.dumps(STATE.get('fixtureMaps',{}).get(device_id,initial_patch(device_id))))
+                    io=controller_io()
+                    items=effective_fixtures(STATE.get('fixtureMaps',{}).get(device_id,initial_patch(device_id)),io)
                     presets=json.loads(json.dumps(STATE.get('fixturePresets',PRESETS)))
                     target=d['ip']
-                try:result=MONITOR.start_fixture_test(target,items,presets)
+                try:result=MONITOR.start_fixture_test(target,items,presets,
+                                                       io['outputUniverse'] if io else None,
+                                                       io['inputUniverse'] if io else None)
                 except ValueError as exc:return self.reply({'error':str(exc)},409)
                 return self.reply({'test':result},202)
             if path == '/api/artnet/poll':
@@ -636,18 +1109,34 @@ class Handler(BaseHTTPRequestHandler):
                     if d is None:
                         return self.reply({'error': 'Device not found'}, 404)
                     changes = data.get('changes', {})
-                    if not isinstance(changes, dict) or any(k not in ('name', 'zone', 'notes', 'role', 'tracked') for k in changes):
+                    if not isinstance(changes, dict) or any(k not in ('name', 'zone', 'notes', 'role', 'tracked', 'deviceProfile') for k in changes):
                         raise ValueError('Only inventory labels and tracking can be edited')
                     for k, v in changes.items():
                         if k == 'tracked':
                             if not isinstance(v, bool):
                                 raise ValueError('Invalid tracking value')
+                        elif k == 'deviceProfile':
+                            if v not in ('auto','artnet_dmx','wiz_light','smart_switch','midi_controller','usb_device','bluetooth_device','camera','router','network_device'):
+                                raise ValueError('Invalid device profile')
                         elif not isinstance(v, str) or len(v) > (1000 if k == 'notes' else 120):
                             raise ValueError('Invalid label')
                         if k == 'name' and not v.strip():
                             raise ValueError('A device name is required')
                     d.update({k: v.strip() if isinstance(v, str) else v for k, v in changes.items()})
+                    if 'tracked' in changes:
+                        d['trackedAt'] = now() if changes['tracked'] else None
                     event('Updated inventory: ' + d['name'])
+                    save()
+                return self.reply({'saved': True})
+            if path == '/api/known-order':
+                with LOCK:
+                    order = data.get('order')
+                    known_ids = {d['id'] for d in STATE['devices'] if d.get('tracked') is True}
+                    if not isinstance(order, list) or any(not isinstance(item, str) for item in order):
+                        raise ValueError('Invalid Known order')
+                    if len(order) != len(set(order)) or set(order) != known_ids:
+                        raise ValueError('Known order must include each saved device exactly once')
+                    STATE['knownOrder'] = order
                     save()
                 return self.reply({'saved': True})
             return self.reply({'error': 'Not found. Device output commands are not implemented.'}, 404)
@@ -664,20 +1153,32 @@ def main():
     parser.add_argument('--state', type=Path, default=STATE_FILE)
     parser.add_argument('--host-ip', help='Local IPv4 address of the LAN adapter')
     parser.add_argument('--scan-on-start', action='store_true')
+    parser.add_argument('--no-browser', action='store_true', help='Do not open the local node page in the default browser')
     parser.add_argument('--refresh-seconds', type=int, default=0,
                         help='Known-device full scan interval; 0 disables automatic scans (default: 0)')
     args = parser.parse_args()
     PORT, STATE_FILE = args.port, args.state
     HOST_IP = args.host_ip
     load()
+    MONITOR.beam_lamp_states=STATE.setdefault('beamLampStates',{})
     import_led_registry()
-    MONITOR.set_tx_muted(True)
-    CONTROLLER=ControllerModes(MONITOR, STATE_FILE.parent/'controller-backups', stopped=bool(STATE.get('txMuted',False)))
+    # Restore only an explicit, persisted user Blackout. With Blackout released,
+    # TX is still gated until the controller confirms SOFTWARE CONTROL.
+    user_blackout=STATE.get('txMuted') is True
+    STATE['txMuted']=user_blackout
+    save()
+    MONITOR.set_tx_muted(user_blackout)
+    CONTROLLER=ControllerModes(MONITOR, STATE_FILE.parent/'controller-backups', stopped=user_blackout)
     MONITOR.tx_permission=CONTROLLER.tx_allowed
     CONTROLLER.refresh()
+    live_io=controller_io()
+    ensure_beam230_patch(STATE,'00:00:c8:d8:a2:71',
+                         live_io['inputUniverse'] if live_io else 0,
+                         live_io['outputUniverse'] if live_io else 1)
+    save()
     MONITOR.blackout_status=({'txMuted':True,'zeroSent':False,
                               'message':'BLACKOUT · TX stopped without a zero frame'}
-                             if MONITOR.tx_muted else {})
+                             if user_blackout else {})
     MONITOR.logger=ArtNetLog(STATE_FILE.parent/'artnet-log')
     MONITOR.logger.start()
     try:
@@ -687,7 +1188,7 @@ def main():
         print('Network unavailable: %s' % exc, flush=True)
         MONITOR.configure('127.0.0.0/30', '127.0.0.1')
     if MONITOR.start():
-        print('Art-Net monitor: UDP %s; output only on an explicit mapped-fixture Test request' % MONITOR.port, flush=True)
+        print('Art-Net monitor: UDP %s; routing and fixture controls require confirmed SOFTWARE CONTROL TX' % MONITOR.port, flush=True)
         for d in STATE['devices']:
             if d['kind'] == 'artnet' and valid_target(d['ip'], MONITOR.subnet):
                 try:
@@ -699,6 +1200,8 @@ def main():
         print(MONITOR.error, flush=True)
     server = ThreadingHTTPServer((args.bind, PORT), Handler)
     print('SiteFlow Node → http://127.0.0.1:%s · LAN http://%s:%s' % (PORT, MONITOR.host_ip, PORT), flush=True)
+    if not args.no_browser:
+        threading.Timer(1.0, webbrowser.open, args=('http://127.0.0.1:%s/' % PORT,)).start()
     if args.scan_on_start:
         start_scan('scan')
     if args.refresh_seconds:
@@ -707,34 +1210,152 @@ def main():
                 time.sleep(max(30, args.refresh_seconds))
                 start_scan('refresh')
         threading.Thread(target=refresh_loop, daemon=True).start()
-    def routing_loop():
+    def midi_input_loop():
+        sequence=0
         while not MONITOR.stop_event.is_set():
+            refresh_midi_inputs()
+            sequence,events=wait_midi_events(sequence,.25)
+            if MIDI_INPUTS.ingest(events):MONITOR.wake_routing()
+    refresh_midi_inputs()
+    threading.Thread(target=midi_input_loop,daemon=True).start()
+
+    def routing_loop():
+        """Forward the newest accepted input frame; never queue stale frames."""
+        revision=0;cached_key=None;controls=[];fixtures=[];ip=None;output_universe=None;input_universe=None
+        stale_deadline=None
+        while not MONITOR.stop_event.is_set():
+            timeout=None if stale_deadline is None else max(0,stale_deadline-time.monotonic())
+            next_revision,trigger=MONITOR.wait_for_route_frame(revision,timeout)
+            timed_out=next_revision==revision and stale_deadline is not None and time.monotonic()>=stale_deadline
+            if next_revision==revision and not timed_out:continue
+            revision=next_revision
+            if timed_out:trigger=None
             with LOCK:
                 d=next((d for d in STATE['devices'] if d['id']=='00:00:c8:d8:a2:71'),None)
-                controls=STATE.get('inputControls',{}).get('00:00:c8:d8:a2:71',[])
-                fixtures=STATE.get('fixtureMaps',{}).get('00:00:c8:d8:a2:71',[])
-                controls,fixtures=json.loads(json.dumps([controls,fixtures]))
+                raw_controls=STATE.get('inputControls',{}).get('00:00:c8:d8:a2:71')
+                raw_fixtures=STATE.get('fixtureMaps',{}).get('00:00:c8:d8:a2:71')
+                wiz_devices=[d for d in STATE.get('devices',[]) if d.get('kind')=='wiz']
+                io=controller_io()
+                config_key=(id(raw_controls),id(raw_fixtures),
+                            io['inputUniverse'] if io else None,io['outputUniverse'] if io else None,
+                            tuple((d.get('id'),d.get('ip'),d.get('name')) for d in wiz_devices))
                 ip=d['ip'] if d else None
+                input_universe=io['inputUniverse'] if io else None
+                output_universe=io['outputUniverse'] if io else None
+                if config_key!=cached_key:
+                    raw_controls=raw_controls if raw_controls is not None else initial_controls('00:00:c8:d8:a2:71')
+                    raw_fixtures=raw_fixtures if raw_fixtures is not None else initial_patch('00:00:c8:d8:a2:71')
+                    controls=effective_controls(raw_controls,io)
+                    fixtures=effective_fixtures(raw_fixtures,io)
+                    fixtures+=wiz_virtual_fixtures(wiz_devices,io['outputUniverse'] if io else 1)
+                    known={f['id'] for f in fixtures}
+                    for control in controls:
+                        control['targetFixtures']=[fid for fid in control.get('targetFixtures',[]) if fid in known]
+                    cached_key=config_key
+            if not ip:continue
+            if MONITOR.tx_blocked():continue
+            if trigger is not None:
+                source_ip,source_universe,received_at=trigger
+                active_sources={c['universe'] for c in controls if c.get('enabled')}
+                if source_ip!=ip or source_universe not in active_sources:continue
+                stale_deadline=received_at+15.1
+            elif timed_out:
+                stale_deadline=None
+            # A plain wake is caused by a control edit, a manual fader change,
+            # blackout/mode transition, or the one-time worker initialization.
+            MONITOR.route_tick(ip,controls,fixtures,output_universe,midi_controls=MIDI_INPUTS.routing_controls('00:00:c8:d8:a2:71'))
+    MONITOR.wake_routing()
+    threading.Thread(target=routing_loop,daemon=True).start()
+
+    def wiz_output_loop():
+        """Apply the newest selected WiZ target values off the Art-Net hot path."""
+        last_sent={};retry_after={};identity_checked={}
+        while not MONITOR.stop_event.is_set():
+            if MONITOR.tx_blocked():
+                MONITOR.stop_event.wait(.1);continue
+            with MONITOR.lock:targets=copy.deepcopy(MONITOR.wiz_targets)
+            with LOCK:devices=[dict(d) for d in STATE.get('devices',[]) if d.get('kind')=='wiz']
+            by_virtual={'wiz-'+str(d['id']).replace(':','').lower():d for d in devices if d.get('id') and d.get('ip')}
+            for target_id,values in targets.items():
+                device=by_virtual.get(target_id)
+                if not device or not isinstance(values,dict):continue
+                roles={str(k).casefold():int(v) for k,v in values.items() if type(v) is int and 0<=v<=255}
+                master=roles.get('master',0)
+                red,green,blue=(roles.get(color,0) for color in ('red','green','blue'))
+                white,amber,uv=(roles.get(color,0) for color in ('white','amber','uv'))
+                # WiZ has RGB hardware rather than Amber/UV emitters. Approximate
+                # these PAR LED functions with orange and visible violet RGB mixes.
+                rgb=[max(0,min(255,round(v*master/255))) for v in (
+                    red+white+amber+uv*.35,
+                    green+white+amber*.42,
+                    blue+white+uv,
+                )]
+                master_dimming=max(10,min(100,round(master*100/255)))
+                params={'state':master>0,'dimming':master_dimming}
+                if white>0 and not any((red,green,blue,amber,uv)):
+                    params['temp']=4000
+                else:params.update(dict(zip(('r','g','b'),rgb)))
+                strobe=roles.get('strobe',0)
+                # WiZ has no verified native strobe command. Approximate it with
+                # fast dimmer pulses while keeping the lamp powered on. DMX 0/255
+                # remain steady; 1..254 request the fastest local software pulse.
+                strobe_hz=10.0 if 0<strobe<255 else 0.0
+                strobe_on=bool(strobe_hz and int(time.monotonic()*strobe_hz*2)%2==0)
+                if strobe_hz and master:
+                    params['state']=True
+                    params['dimming']=master_dimming if strobe_on else 10
+                if params==last_sent.get(target_id) or time.monotonic()<retry_after.get(target_id,0):continue
+                try:
+                    if not valid_target(device['ip'],STATE.get('network',{}).get('subnet','192.168.18.0/24')):
+                        raise ValueError('WiZ target is outside the current local network')
+                    if identity_checked.get(target_id)!=device.get('ip'):
+                        current=wiz_read(device['ip']);config=current.get('getSystemConfig',{})
+                        expected=str(device.get('mac') or '').replace(':','').lower()
+                        actual=str(config.get('mac') or '').replace(':','').lower()
+                        if not current.get('getPilot') or (expected and actual and expected!=actual):
+                            raise ValueError('WiZ is offline or its identity changed')
+                        identity_checked[target_id]=device['ip']
+                    # Flash edges use the acknowledged setPilot response without a
+                    # second readback round-trip; ordinary color changes retain it.
+                    wiz_command(device['ip'],params,readback=not bool(strobe_hz),wait_ack=not bool(strobe_hz))
+                    last_sent[target_id]=params
+                    MONITOR.wiz_routing_status[target_id]=dict(online=True,lastSentAt=now(),error=None,
+                                                              mode='WiZ dimmer pulse · 10 Hz target' if strobe_hz else 'PAR LED RGB emulation',
+                                                              strobeValue=strobe,strobeHz=strobe_hz,
+                                                              dimming=params.get('dimming'))
+                except (OSError,ValueError) as exc:
+                    retry_after[target_id]=time.monotonic()+1.0
+                    MONITOR.wiz_routing_status[target_id]=dict(online=False,error=str(exc),checkedAt=now())
+            MONITOR.stop_event.wait(.05)
+    threading.Thread(target=wiz_output_loop,daemon=True).start()
+
+    def led_output_loop():
+        """Keep LED rendering on its own cadence so it cannot delay DMX routing."""
+        cached_key=None;leds=[];runtime_controls=[];ip=None
+        while not MONITOR.stop_event.is_set():
+            with LOCK:
+                raw_leds=STATE.get('ledFixtures',[])
+                raw_controls=STATE.get('inputControls',{}).get('00:00:c8:d8:a2:71')
+                io=controller_io()
+                d=next((d for d in STATE['devices'] if d['id']=='00:00:c8:d8:a2:71'),None)
+                ip=d['ip'] if d else None
+                key=(id(raw_leds),id(raw_controls),io['inputUniverse'] if io else None)
+                if key!=cached_key:
+                    leds=json.loads(json.dumps(raw_leds))
+                    runtime_controls=effective_controls(raw_controls or initial_controls('00:00:c8:d8:a2:71'),io)
+                    cached_key=key
             if ip:
-                physical_controls=json.loads(json.dumps(controls))
-                known={f['id'] for f in fixtures}
-                for c in physical_controls:c['targetFixtures']=[fid for fid in c.get('targetFixtures',[]) if fid in known]
-                MONITOR.route_tick(ip,physical_controls,fixtures)
                 if MONITOR.tx_blocked():
                     LED.status=dict(active=False,message='BLACKOUT · TX stopped')
-                    MONITOR.stop_event.wait(.04)
-                    continue
-                with LOCK:
-                    leds=json.loads(json.dumps(STATE.get('ledFixtures',[])))
+                else:
                     try:
-                        values=LED.values(leds,controls,MONITOR,ip)
-                        # A disabled channel on an otherwise active controller must go dark.
+                        values=LED.values(leds,runtime_controls,MONITOR,ip,midi_controls=MIDI_INPUTS.routing_controls('00:00:c8:d8:a2:71'))
                         active_controllers={f['controllerIp'] for f in leds if f['id'] in values}
                         retired=LED.last_active-active_controllers
                         send_values=dict(values)
-                        for f in leds:
-                            if f['controllerIp'] in retired:send_values[f['id']]=[0]*len(f['mapping'])
-                        frames=controller_frames(leds,send_values,time.monotonic())
+                        for fixture in leds:
+                            if fixture['controllerIp'] in retired:send_values[fixture['id']]=[0]*len(fixture['mapping'])
+                        frames=controller_frames(leds,send_values,time.monotonic(),LED.render_modes)
                         if frames and MONITOR.send_pixel_frames(frames,int(time.monotonic()*25)%255+1):
                             LED.status=dict(active=True,controllers=sorted(active_controllers),lastSentAt=now())
                             LED.last_active=active_controllers
@@ -742,7 +1363,7 @@ def main():
                         else:LED.status=dict(active=False,message='Output disabled')
                     except (ValueError,OSError) as exc:LED.status=dict(active=False,error=str(exc))
             MONITOR.stop_event.wait(.04)
-    threading.Thread(target=routing_loop,daemon=True).start()
+    threading.Thread(target=led_output_loop,daemon=True).start()
     def controller_mode_loop():
         while not MONITOR.stop_event.wait(30):CONTROLLER.refresh()
     threading.Thread(target=controller_mode_loop,daemon=True).start()

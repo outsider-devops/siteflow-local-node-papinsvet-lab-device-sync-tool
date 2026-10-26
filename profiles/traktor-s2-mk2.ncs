@@ -1,0 +1,1695 @@
+<?xml version="1.0"?>
+<ni-controller-midi-map version="1">
+  <wrapmode>0</wrapmode>
+  <current_index>0</current_index>
+  <midi-map type="TraktorKontrolS2MK2" name="Template 1" port="internal">
+    <shiftmode>0</shiftmode>
+    <wrapmode>0</wrapmode>
+    <controls>
+      <button version="1" id="ButtonAssignC">
+        <controller>0</controller>
+        <channel>0</channel>
+        <off>0</off>
+        <on>127</on>
+        <last>0</last>
+        <lastExt>0</lastExt>
+        <behavior>gate</behavior>
+        <reaction>ondown</reaction>
+      </button>
+      <button version="1" id="ButtonAssignD">
+        <controller>0</controller>
+        <channel>1</channel>
+        <off>0</off>
+        <on>127</on>
+        <last>0</last>
+        <lastExt>0</lastExt>
+        <behavior>gate</behavior>
+        <reaction>ondown</reaction>
+      </button>
+      <button version="1" id="ButtonBrowsep">
+        <controller>3</controller>
+        <channel>4</channel>
+        <off>0</off>
+        <on>127</on>
+        <last>0</last>
+        <lastExt>0</lastExt>
+        <behavior>gate</behavior>
+        <reaction>ondown</reaction>
+      </button>
+      <button version="1" id="ButtonFx1A">
+        <controller>62</controller>
+        <channel>0</channel>
+        <off>0</off>
+        <on>127</on>
+        <last>0</last>
+        <lastExt>0</lastExt>
+        <behavior>gate</behavior>
+        <reaction>ondown</reaction>
+      </button>
+      <button version="1" id="ButtonFx1B">
+        <controller>62</controller>
+        <channel>1</channel>
+        <off>0</off>
+        <on>127</on>
+        <last>0</last>
+        <lastExt>0</lastExt>
+        <behavior>gate</behavior>
+        <reaction>ondown</reaction>
+      </button>
+      <button version="1" id="ButtonFx1B1">
+        <controller>25</controller>
+        <channel>4</channel>
+        <off>0</off>
+        <on>127</on>
+        <last>0</last>
+        <lastExt>0</lastExt>
+        <behavior>gate</behavior>
+        <reaction>ondown</reaction>
+      </button>
+      <button version="1" id="ButtonFx1B2">
+        <controller>26</controller>
+        <channel>4</channel>
+        <off>0</off>
+        <on>127</on>
+        <last>0</last>
+        <lastExt>0</lastExt>
+        <behavior>gate</behavior>
+        <reaction>ondown</reaction>
+      </button>
+      <button version="1" id="ButtonFx1B3">
+        <controller>27</controller>
+        <channel>4</channel>
+        <off>0</off>
+        <on>127</on>
+        <last>0</last>
+        <lastExt>0</lastExt>
+        <behavior>gate</behavior>
+        <reaction>ondown</reaction>
+      </button>
+      <button version="1" id="ButtonFx1On">
+        <controller>24</controller>
+        <channel>4</channel>
+        <off>0</off>
+        <on>127</on>
+        <last>0</last>
+        <lastExt>0</lastExt>
+        <behavior>gate</behavior>
+        <reaction>ondown</reaction>
+      </button>
+      <button version="1" id="ButtonFx2A">
+        <controller>63</controller>
+        <channel>0</channel>
+        <off>0</off>
+        <on>127</on>
+        <last>0</last>
+        <lastExt>0</lastExt>
+        <behavior>gate</behavior>
+        <reaction>ondown</reaction>
+      </button>
+      <button version="1" id="ButtonFx2B">
+        <controller>63</controller>
+        <channel>1</channel>
+        <off>0</off>
+        <on>127</on>
+        <last>0</last>
+        <lastExt>0</lastExt>
+        <behavior>gate</behavior>
+        <reaction>ondown</reaction>
+      </button>
+      <button version="1" id="ButtonFx2B1">
+        <controller>35</controller>
+        <channel>4</channel>
+        <off>0</off>
+        <on>127</on>
+        <last>0</last>
+        <lastExt>0</lastExt>
+        <behavior>gate</behavior>
+        <reaction>ondown</reaction>
+      </button>
+      <button version="1" id="ButtonFx2B2">
+        <controller>36</controller>
+        <channel>4</channel>
+        <off>0</off>
+        <on>127</on>
+        <last>0</last>
+        <lastExt>0</lastExt>
+        <behavior>gate</behavior>
+        <reaction>ondown</reaction>
+      </button>
+      <button version="1" id="ButtonFx2B3">
+        <controller>37</controller>
+        <channel>4</channel>
+        <off>0</off>
+        <on>127</on>
+        <last>0</last>
+        <lastExt>0</lastExt>
+        <behavior>gate</behavior>
+        <reaction>ondown</reaction>
+      </button>
+      <button version="1" id="ButtonFx2On">
+        <controller>34</controller>
+        <channel>4</channel>
+        <off>0</off>
+        <on>127</on>
+        <last>0</last>
+        <lastExt>0</lastExt>
+        <behavior>gate</behavior>
+        <reaction>ondown</reaction>
+      </button>
+      <button version="1" id="ButtonGainpA">
+        <controller>61</controller>
+        <channel>0</channel>
+        <off>0</off>
+        <on>127</on>
+        <last>0</last>
+        <lastExt>0</lastExt>
+        <behavior>gate</behavior>
+        <reaction>ondown</reaction>
+      </button>
+      <button version="1" id="ButtonGainpB">
+        <controller>61</controller>
+        <channel>1</channel>
+        <off>0</off>
+        <on>127</on>
+        <last>0</last>
+        <lastExt>0</lastExt>
+        <behavior>gate</behavior>
+        <reaction>ondown</reaction>
+      </button>
+      <button version="1" id="ButtonLoadA">
+        <controller>1</controller>
+        <channel>0</channel>
+        <off>0</off>
+        <on>127</on>
+        <last>0</last>
+        <lastExt>0</lastExt>
+        <behavior>gate</behavior>
+        <reaction>ondown</reaction>
+      </button>
+      <button version="1" id="ButtonLoadB">
+        <controller>1</controller>
+        <channel>1</channel>
+        <off>0</off>
+        <on>127</on>
+        <last>0</last>
+        <lastExt>0</lastExt>
+        <behavior>gate</behavior>
+        <reaction>ondown</reaction>
+      </button>
+      <button version="1" id="ButtonMcueA">
+        <controller>68</controller>
+        <channel>0</channel>
+        <off>0</off>
+        <on>127</on>
+        <last>0</last>
+        <lastExt>0</lastExt>
+        <behavior>gate</behavior>
+        <reaction>ondown</reaction>
+      </button>
+      <button version="1" id="ButtonMcueB">
+        <controller>68</controller>
+        <channel>1</channel>
+        <off>0</off>
+        <on>127</on>
+        <last>0</last>
+        <lastExt>0</lastExt>
+        <behavior>gate</behavior>
+        <reaction>ondown</reaction>
+      </button>
+      <wheel version="1" id="DialBrowset">
+        <controller mode="comp">2</controller>
+        <channel>4</channel>
+        <min>0</min>
+        <max>127</max>
+        <default>0</default>
+        <last>1</last>
+      </wheel>
+      <wheel version="1" id="DialGaintA">
+        <controller mode="comp">60</controller>
+        <channel>0</channel>
+        <min>0</min>
+        <max>127</max>
+        <default>0</default>
+        <last>0</last>
+      </wheel>
+      <wheel version="1" id="DialGaintB">
+        <controller mode="comp">60</controller>
+        <channel>1</channel>
+        <min>0</min>
+        <max>127</max>
+        <default>0</default>
+        <last>0</last>
+      </wheel>
+      <knob version="1" id="LedchainLevelmeterA">
+        <controller>70</controller>
+        <channel>0</channel>
+        <min>0</min>
+        <max>127</max>
+        <default>0</default>
+        <last>0</last>
+        <lastExt>0</lastExt>
+        <range>360</range>
+        <steps>20</steps>
+        <bipolar>off</bipolar>
+        <min>0</min>
+        <max>127</max>
+        <ledPattern>0</ledPattern>
+        <behavior>none</behavior>
+      </knob>
+      <knob version="1" id="LedchainLevelmeterB">
+        <controller>70</controller>
+        <channel>1</channel>
+        <min>0</min>
+        <max>127</max>
+        <default>0</default>
+        <last>0</last>
+        <lastExt>0</lastExt>
+        <range>360</range>
+        <steps>20</steps>
+        <bipolar>off</bipolar>
+        <min>0</min>
+        <max>127</max>
+        <ledPattern>0</ledPattern>
+        <behavior>none</behavior>
+      </knob>
+      <knob version="1" id="PotiCuemixK">
+        <controller>11</controller>
+        <channel>4</channel>
+        <min>0</min>
+        <max>127</max>
+        <default>0</default>
+        <last>0</last>
+        <range>360</range>
+        <steps>20</steps>
+        <bipolar>off</bipolar>
+      </knob>
+      <knob version="1" id="PotiEqhiA">
+        <controller>64</controller>
+        <channel>0</channel>
+        <min>0</min>
+        <max>127</max>
+        <default>0</default>
+        <last>0</last>
+        <range>360</range>
+        <steps>20</steps>
+        <bipolar>off</bipolar>
+      </knob>
+      <knob version="1" id="PotiEqhiB">
+        <controller>64</controller>
+        <channel>1</channel>
+        <min>0</min>
+        <max>127</max>
+        <default>0</default>
+        <last>0</last>
+        <range>360</range>
+        <steps>20</steps>
+        <bipolar>off</bipolar>
+      </knob>
+      <knob version="1" id="PotiEqlowA">
+        <controller>66</controller>
+        <channel>0</channel>
+        <min>0</min>
+        <max>127</max>
+        <default>0</default>
+        <last>0</last>
+        <range>360</range>
+        <steps>20</steps>
+        <bipolar>off</bipolar>
+      </knob>
+      <knob version="1" id="PotiEqlowB">
+        <controller>66</controller>
+        <channel>1</channel>
+        <min>0</min>
+        <max>127</max>
+        <default>0</default>
+        <last>0</last>
+        <range>360</range>
+        <steps>20</steps>
+        <bipolar>off</bipolar>
+      </knob>
+      <knob version="1" id="PotiEqmidA">
+        <controller>65</controller>
+        <channel>0</channel>
+        <min>0</min>
+        <max>127</max>
+        <default>0</default>
+        <last>0</last>
+        <range>360</range>
+        <steps>20</steps>
+        <bipolar>off</bipolar>
+      </knob>
+      <knob version="1" id="PotiEqmidB">
+        <controller>65</controller>
+        <channel>1</channel>
+        <min>0</min>
+        <max>127</max>
+        <default>0</default>
+        <last>0</last>
+        <range>360</range>
+        <steps>20</steps>
+        <bipolar>off</bipolar>
+      </knob>
+      <knob version="1" id="PotiFaderA">
+        <controller>69</controller>
+        <channel>0</channel>
+        <min>0</min>
+        <max>127</max>
+        <default>0</default>
+        <last>0</last>
+        <range>360</range>
+        <steps>20</steps>
+        <bipolar>off</bipolar>
+      </knob>
+      <knob version="1" id="PotiFaderB">
+        <controller>69</controller>
+        <channel>1</channel>
+        <min>0</min>
+        <max>127</max>
+        <default>0</default>
+        <last>0</last>
+        <range>360</range>
+        <steps>20</steps>
+        <bipolar>off</bipolar>
+      </knob>
+      <knob version="1" id="PotiFx1Dw">
+        <controller>20</controller>
+        <channel>4</channel>
+        <min>0</min>
+        <max>127</max>
+        <default>0</default>
+        <last>0</last>
+        <range>360</range>
+        <steps>20</steps>
+        <bipolar>off</bipolar>
+      </knob>
+      <knob version="1" id="PotiFx1K1">
+        <controller>21</controller>
+        <channel>4</channel>
+        <min>0</min>
+        <max>127</max>
+        <default>0</default>
+        <last>0</last>
+        <range>360</range>
+        <steps>20</steps>
+        <bipolar>off</bipolar>
+      </knob>
+      <knob version="1" id="PotiFx1K2">
+        <controller>22</controller>
+        <channel>4</channel>
+        <min>0</min>
+        <max>127</max>
+        <default>0</default>
+        <last>0</last>
+        <range>360</range>
+        <steps>20</steps>
+        <bipolar>off</bipolar>
+      </knob>
+      <knob version="1" id="PotiFx1K3">
+        <controller>23</controller>
+        <channel>4</channel>
+        <min>0</min>
+        <max>127</max>
+        <default>0</default>
+        <last>0</last>
+        <range>360</range>
+        <steps>20</steps>
+        <bipolar>off</bipolar>
+      </knob>
+      <knob version="1" id="PotiFx2Dw">
+        <controller>30</controller>
+        <channel>4</channel>
+        <min>0</min>
+        <max>127</max>
+        <default>0</default>
+        <last>0</last>
+        <range>360</range>
+        <steps>20</steps>
+        <bipolar>off</bipolar>
+      </knob>
+      <knob version="1" id="PotiFx2K1">
+        <controller>31</controller>
+        <channel>4</channel>
+        <min>0</min>
+        <max>127</max>
+        <default>0</default>
+        <last>0</last>
+        <range>360</range>
+        <steps>20</steps>
+        <bipolar>off</bipolar>
+      </knob>
+      <knob version="1" id="PotiFx2K2">
+        <controller>32</controller>
+        <channel>4</channel>
+        <min>0</min>
+        <max>127</max>
+        <default>0</default>
+        <last>0</last>
+        <range>360</range>
+        <steps>20</steps>
+        <bipolar>off</bipolar>
+      </knob>
+      <knob version="1" id="PotiFx2K3">
+        <controller>33</controller>
+        <channel>4</channel>
+        <min>0</min>
+        <max>127</max>
+        <default>0</default>
+        <last>0</last>
+        <range>360</range>
+        <steps>20</steps>
+        <bipolar>off</bipolar>
+      </knob>
+      <knob version="1" id="PotiVolume">
+        <controller>69</controller>
+        <channel>2</channel>
+        <min>0</min>
+        <max>127</max>
+        <default>0</default>
+        <last>0</last>
+        <range>360</range>
+        <steps>20</steps>
+        <bipolar>off</bipolar>
+      </knob>
+      <knob version="1" id="PotiXfader">
+        <controller>10</controller>
+        <channel>4</channel>
+        <min>0</min>
+        <max>127</max>
+        <default>0</default>
+        <last>0</last>
+        <range>360</range>
+        <steps>20</steps>
+        <bipolar>off</bipolar>
+      </knob>
+    </controls>
+    <pagesLeft>
+      <current_index>0</current_index>
+      <page name="Basic">
+        <button version="1" id="ButtonCue1A">
+          <controller>11</controller>
+          <channel>0</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <led version="1" id="ButtonCue1AB">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>11</controller>
+          <channel>2</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <led version="1" id="ButtonCue1AH">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>11</controller>
+          <channel>0</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <led version="1" id="ButtonCue1AS">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>11</controller>
+          <channel>1</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <button version="1" id="ButtonCue2A">
+          <controller>12</controller>
+          <channel>0</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <led version="1" id="ButtonCue2AB">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>12</controller>
+          <channel>2</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <led version="1" id="ButtonCue2AH">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>12</controller>
+          <channel>0</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <led version="1" id="ButtonCue2AS">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>12</controller>
+          <channel>1</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <button version="1" id="ButtonCue3A">
+          <controller>13</controller>
+          <channel>0</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <led version="1" id="ButtonCue3AB">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>13</controller>
+          <channel>2</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <led version="1" id="ButtonCue3AH">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>13</controller>
+          <channel>0</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <led version="1" id="ButtonCue3AS">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>13</controller>
+          <channel>1</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <button version="1" id="ButtonCue4A">
+          <controller>14</controller>
+          <channel>0</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <led version="1" id="ButtonCue4AB">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>14</controller>
+          <channel>2</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <led version="1" id="ButtonCue4AH">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>14</controller>
+          <channel>0</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <led version="1" id="ButtonCue4AS">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>14</controller>
+          <channel>1</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <button version="1" id="ButtonCueA">
+          <controller>9</controller>
+          <channel>0</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <button version="1" id="ButtonJogpushA">
+          <controller>3</controller>
+          <channel>0</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <button version="1" id="ButtonLoopinA">
+          <controller>23</controller>
+          <channel>0</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <button version="1" id="ButtonLoopmpA">
+          <controller>20</controller>
+          <channel>0</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <button version="1" id="ButtonLoopoutA">
+          <controller>24</controller>
+          <channel>0</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <button version="1" id="ButtonLoopspA">
+          <controller>22</controller>
+          <channel>0</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <button version="1" id="ButtonPlayA">
+          <controller>10</controller>
+          <channel>0</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <button version="1" id="ButtonSyncA">
+          <controller>8</controller>
+          <channel>0</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <button version="1" id="ButtonTemporstA">
+          <controller>5</controller>
+          <channel>0</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <wheel version="1" id="DialLoopmtA">
+          <controller mode="comp">19</controller>
+          <channel>0</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>1</last>
+        </wheel>
+        <wheel version="1" id="DialLoopstA">
+          <controller mode="comp">21</controller>
+          <channel>0</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>1</last>
+        </wheel>
+        <wheel ticks="20" version="1" id="JogwheelJogturnA">
+          <controller mode="comp">2</controller>
+          <channel>0</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>1</last>
+          <delta-ticks>-3</delta-ticks>
+        </wheel>
+        <knob version="1" id="PotiTempofA">
+          <controller>4</controller>
+          <channel>0</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>58</last>
+          <range>360</range>
+          <steps>20</steps>
+          <bipolar>off</bipolar>
+        </knob>
+      </page>
+      <hint>1</hint>
+      <page name="Shift">
+        <button version="1" id="ButtonCue1A">
+          <controller>41</controller>
+          <channel>0</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <led version="1" id="ButtonCue1AB">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>41</controller>
+          <channel>2</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <led version="1" id="ButtonCue1AH">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>41</controller>
+          <channel>0</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <led version="1" id="ButtonCue1AS">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>41</controller>
+          <channel>1</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <button version="1" id="ButtonCue2A">
+          <controller>42</controller>
+          <channel>0</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <led version="1" id="ButtonCue2AB">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>42</controller>
+          <channel>2</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <led version="1" id="ButtonCue2AH">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>42</controller>
+          <channel>0</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <led version="1" id="ButtonCue2AS">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>42</controller>
+          <channel>1</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <button version="1" id="ButtonCue3A">
+          <controller>43</controller>
+          <channel>0</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <led version="1" id="ButtonCue3AB">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>43</controller>
+          <channel>2</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <led version="1" id="ButtonCue3AH">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>43</controller>
+          <channel>0</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <led version="1" id="ButtonCue3AS">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>43</controller>
+          <channel>1</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <button version="1" id="ButtonCue4A">
+          <controller>44</controller>
+          <channel>0</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <led version="1" id="ButtonCue4AB">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>44</controller>
+          <channel>2</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <led version="1" id="ButtonCue4AH">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>44</controller>
+          <channel>0</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <led version="1" id="ButtonCue4AS">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>44</controller>
+          <channel>1</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <button version="1" id="ButtonCueA">
+          <controller>39</controller>
+          <channel>0</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <button version="1" id="ButtonJogpushA">
+          <controller>33</controller>
+          <channel>0</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <button version="1" id="ButtonLoopinA">
+          <controller>53</controller>
+          <channel>0</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <button version="1" id="ButtonLoopmpA">
+          <controller>50</controller>
+          <channel>0</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <button version="1" id="ButtonLoopoutA">
+          <controller>54</controller>
+          <channel>0</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <button version="1" id="ButtonLoopspA">
+          <controller>52</controller>
+          <channel>0</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <button version="1" id="ButtonPlayA">
+          <controller>40</controller>
+          <channel>0</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <button version="1" id="ButtonSyncA">
+          <controller>38</controller>
+          <channel>0</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <button version="1" id="ButtonTemporstA">
+          <controller>35</controller>
+          <channel>0</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <wheel version="1" id="DialLoopmtA">
+          <controller mode="comp">49</controller>
+          <channel>0</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </wheel>
+        <wheel version="1" id="DialLoopstA">
+          <controller mode="comp">51</controller>
+          <channel>0</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </wheel>
+        <wheel ticks="20" version="1" id="JogwheelJogturnA">
+          <controller mode="comp">32</controller>
+          <channel>0</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+          <delta-ticks>0</delta-ticks>
+        </wheel>
+        <knob version="1" id="PotiTempofA">
+          <controller>34</controller>
+          <channel>0</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+          <range>360</range>
+          <steps>20</steps>
+          <bipolar>off</bipolar>
+        </knob>
+      </page>
+    </pagesLeft>
+    <pagesRight>
+      <current_index>0</current_index>
+      <hint>512</hint>
+      <page name="Basic">
+        <button version="1" id="ButtonCue1B">
+          <controller>11</controller>
+          <channel>1</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <led version="1" id="ButtonCue1BB">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>11</controller>
+          <channel>2</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <led version="1" id="ButtonCue1BH">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>11</controller>
+          <channel>0</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <led version="1" id="ButtonCue1BS">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>11</controller>
+          <channel>1</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <button version="1" id="ButtonCue2B">
+          <controller>12</controller>
+          <channel>1</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <led version="1" id="ButtonCue2BB">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>12</controller>
+          <channel>2</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <led version="1" id="ButtonCue2BH">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>12</controller>
+          <channel>0</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <led version="1" id="ButtonCue2BS">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>12</controller>
+          <channel>1</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <button version="1" id="ButtonCue3B">
+          <controller>13</controller>
+          <channel>1</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <led version="1" id="ButtonCue3BB">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>13</controller>
+          <channel>2</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <led version="1" id="ButtonCue3BH">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>13</controller>
+          <channel>0</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <led version="1" id="ButtonCue3BS">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>13</controller>
+          <channel>1</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <button version="1" id="ButtonCue4B">
+          <controller>14</controller>
+          <channel>1</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <led version="1" id="ButtonCue4BB">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>14</controller>
+          <channel>2</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <led version="1" id="ButtonCue4BH">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>14</controller>
+          <channel>0</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <led version="1" id="ButtonCue4BS">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>14</controller>
+          <channel>1</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <button version="1" id="ButtonCueB">
+          <controller>9</controller>
+          <channel>1</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <button version="1" id="ButtonJogpushB">
+          <controller>3</controller>
+          <channel>1</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <button version="1" id="ButtonLoopinB">
+          <controller>23</controller>
+          <channel>1</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <button version="1" id="ButtonLoopmpB">
+          <controller>20</controller>
+          <channel>1</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <button version="1" id="ButtonLoopoutB">
+          <controller>24</controller>
+          <channel>1</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <button version="1" id="ButtonLoopspB">
+          <controller>22</controller>
+          <channel>1</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <button version="1" id="ButtonPlayB">
+          <controller>10</controller>
+          <channel>1</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <button version="1" id="ButtonSyncB">
+          <controller>8</controller>
+          <channel>1</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <button version="1" id="ButtonTemporstB">
+          <controller>5</controller>
+          <channel>1</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <wheel version="1" id="DialLoopmtB">
+          <controller mode="comp">19</controller>
+          <channel>1</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>1</last>
+        </wheel>
+        <wheel version="1" id="DialLoopstB">
+          <controller mode="comp">21</controller>
+          <channel>1</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>1</last>
+        </wheel>
+        <wheel ticks="20" version="1" id="JogwheelJogturnB">
+          <controller mode="comp">2</controller>
+          <channel>1</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>127</last>
+          <delta-ticks>-2</delta-ticks>
+        </wheel>
+        <knob version="1" id="PotiTempofB">
+          <controller>4</controller>
+          <channel>1</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>63</last>
+          <range>360</range>
+          <steps>20</steps>
+          <bipolar>off</bipolar>
+        </knob>
+      </page>
+      <hint>513</hint>
+      <page name="Shift">
+        <button version="1" id="ButtonCue1B">
+          <controller>41</controller>
+          <channel>1</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <led version="1" id="ButtonCue1BB">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>41</controller>
+          <channel>2</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <led version="1" id="ButtonCue1BH">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>41</controller>
+          <channel>0</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <led version="1" id="ButtonCue1BS">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>41</controller>
+          <channel>1</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <button version="1" id="ButtonCue2B">
+          <controller>42</controller>
+          <channel>1</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <led version="1" id="ButtonCue2BB">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>42</controller>
+          <channel>2</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <led version="1" id="ButtonCue2BH">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>42</controller>
+          <channel>0</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <led version="1" id="ButtonCue2BS">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>42</controller>
+          <channel>1</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <button version="1" id="ButtonCue3B">
+          <controller>43</controller>
+          <channel>1</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <led version="1" id="ButtonCue3BB">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>43</controller>
+          <channel>2</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <led version="1" id="ButtonCue3BH">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>43</controller>
+          <channel>0</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <led version="1" id="ButtonCue3BS">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>43</controller>
+          <channel>1</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <button version="1" id="ButtonCue4B">
+          <controller>44</controller>
+          <channel>1</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <led version="1" id="ButtonCue4BB">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>44</controller>
+          <channel>2</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <led version="1" id="ButtonCue4BH">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>44</controller>
+          <channel>0</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <led version="1" id="ButtonCue4BS">
+          <display type="0">
+            <unit color-type="1" color-mode="0" color-on-index="2" color-off-index="1" />
+          </display>
+          <controller>44</controller>
+          <channel>1</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </led>
+        <button version="1" id="ButtonCueB">
+          <controller>39</controller>
+          <channel>1</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <button version="1" id="ButtonJogpushB">
+          <controller>33</controller>
+          <channel>1</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <button version="1" id="ButtonLoopinB">
+          <controller>53</controller>
+          <channel>1</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <button version="1" id="ButtonLoopmpB">
+          <controller>50</controller>
+          <channel>1</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <button version="1" id="ButtonLoopoutB">
+          <controller>54</controller>
+          <channel>1</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <button version="1" id="ButtonLoopspB">
+          <controller>52</controller>
+          <channel>1</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <button version="1" id="ButtonPlayB">
+          <controller>40</controller>
+          <channel>1</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <button version="1" id="ButtonSyncB">
+          <controller>38</controller>
+          <channel>1</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <button version="1" id="ButtonTemporstB">
+          <controller>35</controller>
+          <channel>1</channel>
+          <off>0</off>
+          <on>127</on>
+          <last>0</last>
+          <lastExt>0</lastExt>
+          <behavior>gate</behavior>
+          <reaction>ondown</reaction>
+        </button>
+        <wheel version="1" id="DialLoopmtB">
+          <controller mode="comp">49</controller>
+          <channel>1</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </wheel>
+        <wheel version="1" id="DialLoopstB">
+          <controller mode="comp">51</controller>
+          <channel>1</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+        </wheel>
+        <wheel ticks="20" version="1" id="JogwheelJogturnB">
+          <controller mode="comp">32</controller>
+          <channel>1</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+          <delta-ticks>0</delta-ticks>
+        </wheel>
+        <knob version="1" id="PotiTempofB">
+          <controller>34</controller>
+          <channel>1</channel>
+          <min>0</min>
+          <max>127</max>
+          <default>0</default>
+          <last>0</last>
+          <range>360</range>
+          <steps>20</steps>
+          <bipolar>off</bipolar>
+        </knob>
+      </page>
+    </pagesRight>
+  </midi-map>
+</ni-controller-midi-map>

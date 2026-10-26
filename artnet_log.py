@@ -45,8 +45,16 @@ class ArtNetLog:
         temporal={'receivedAt','sentAt','sequence','lastSeen'}
         key=(record.get('type'),record.get('sourceIp'),record.get('destinationIp'),
              record.get('universe'),record.get('physical'),record.get('opcode'),record.get('source'))
-        signature=json.dumps({k:v for k,v in record.items() if k not in temporal},
-                             ensure_ascii=False,sort_keys=True,separators=(',',':'))
+        values=record.get('values')
+        if isinstance(values,list) and all(type(v) is int and 0<=v<=255 for v in values):
+            # A DMX payload is already a byte vector. Avoid JSON-serializing up
+            # to 512 channel values on the real-time receive/forwarding path.
+            metadata=tuple((k,json.dumps(v,ensure_ascii=False,sort_keys=True,separators=(',',':')))
+                           for k,v in sorted(record.items()) if k not in temporal and k!='values')
+            signature=(metadata,bytes(values))
+        else:
+            signature=json.dumps({k:v for k,v in record.items() if k not in temporal},
+                                 ensure_ascii=False,sort_keys=True,separators=(',',':'))
         now=time.monotonic()
         with self.lock:
             previous=self.last_records.get(key)

@@ -28,3 +28,30 @@ class LEDTests(unittest.TestCase):
   self.assertTrue(m.send_pixel_frames(frames,12));self.assertEqual(m.socket.sendto.call_count,9)
   self.assertEqual(parse_packet(m.socket.sendto.call_args_list[0].args[0])['sequence'],12)
   m.set_tx_muted(True);self.assertFalse(m.send_pixel_frames(frames,13));self.assertEqual(m.socket.sendto.call_count,9)
+ def test_matrix_pixel_fill_height_edge_master_and_reverse(self):
+  from led_controls import pixel_payload
+  f=dict(defaults()[-1],count=10,order='RGB',limit=255)
+  values=[255,128,0,0,0,0,0,0]
+  red=pixel_payload(f,values,0)[::3]
+  self.assertEqual(red[:5],[255]*5);self.assertAlmostEqual(red[5],5,delta=1);self.assertEqual(red[6:],[0]*4)
+  self.assertEqual(pixel_payload(dict(f,reverse=True),values,0)[::3],list(reversed(red)))
+  self.assertEqual(pixel_payload(f,[0,255,255,255,255,0,0,0],0),[0]*30)
+  self.assertEqual(pixel_payload(f,[255,0,0,0,255,0,0,0],0),[255]*30)
+  self.assertEqual(pixel_payload(f,[255,0,0,0,0,0,0,0],0),[0]*30)
+ def test_pixel_fill_restricted_to_matrix(self):
+  with self.assertRaises(ValueError):validate_mapping(dict(mapping=['Master','Red'],renderMode='pixel-fill'),defaults()[0])
+ def test_matrix_target_mode_tracks_latest_source(self):
+  f=defaults()[-1];m=ArtNetMonitor();t=time.monotonic();m._fixture_baseline=Mock(return_value=[255,128]+[0]*190)
+  m.streams['desk']=dict(sourceIp='192.168.18.80',universe=0,_last=t,_changed={1:t,2:t})
+  c=dict(id='eight',start=1,count=16,universe=0,enabled=True,targetFixtures=[f['id']],targetModes={f['id']:'parled'},faderFunctions=['Master','Red']+[None]*14)
+  runtime=LEDRuntime();values=runtime.values([f],[c],m,'192.168.18.80')
+  self.assertEqual(runtime.render_modes[f['id']],'parled')
+  uniform=controller_frames([f],values,0,runtime.render_modes)[(f['controllerIp'],16)]
+  self.assertEqual(uniform[:3],uniform[300:303])
+  c['targetModes'][f['id']]='pixel-fill';values=runtime.values([f],[c],m,'192.168.18.80')
+  fill=controller_frames([f],values,0,runtime.render_modes)[(f['controllerIp'],16)]
+  self.assertEqual(runtime.render_modes[f['id']],'pixel-fill');self.assertNotEqual(fill[:3],fill[450:453])
+ def test_matrix_parled_target_is_not_beam_conversion(self):
+  from midi_inputs import mapped_values
+  f=defaults()[-1];c=dict(id='midi',enabled=True,targetFixtures=[f['id']],targetModes={f['id']:'parled'},faderFunctions=['Red']+[None]*15,values=[128]+[0]*15,changed=[10]+[0]*15)
+  self.assertEqual(mapped_values([c],[virtual_fixture(f)])[('virtual',f['id'],'Red')][0],128)

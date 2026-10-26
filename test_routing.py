@@ -103,3 +103,30 @@ class RoutingTests(unittest.TestCase):
   empty=dict(id='input10',routingMode='mapped',enabled=True,universe=1,start=145,count=16,targetFixtures=[],faderFunctions=['Master']+[None]*15)
   m.route_tick('192.168.18.80',[direct,empty],[]);v=parse_packet(m.socket.sendto.call_args.args[0])['values']
   self.assertEqual(v[144],0)
+
+ def test_lamp_state_does_not_override_input_faders(self):
+  fixture=dict(id='beam',name='Beam',universe=1,start=145,mappingPreset='beam230-16ch',channels=[dict(function='Unknown',default=0) for _ in range(16)])
+  control=dict(id='ten',routingMode='direct',enabled=True,universe=1,start=145,count=16,targetFixtures=[])
+  for phase in ('off-pulse','cooling','on-pulse','ignition-wait'):
+   with self.subTest(phase=phase):
+    m=self.setup_monitor();base=[0]*192;base[150]=255;base[151]=137;m._fixture_baseline=Mock(return_value=base)
+    m.beam_lamp_states['beam']=dict(phase=phase)
+    m.route_tick('192.168.18.80',[control],[fixture])
+    frame=parse_packet(m.socket.sendto.call_args.args[0])['values']
+    self.assertEqual(frame[150:152],[255,137])
+
+ def test_empty_fixture_deadlines_do_not_stop_routing(self):
+  m=self.setup_monitor();m.fixture_controls['beam']=dict(destinationIp='192.168.18.80',manualUntil=None,actionDeadline=None)
+  fixture=dict(id='p',name='Lamp',universe=1,start=193,channels=[dict(function='Red',default=0)])
+  c=dict(id='desk',enabled=True,universe=1,start=81,targetFixtures=['p'],faderFunctions=['Red']+[None]*15)
+  m.route_tick('192.168.18.80',c,[fixture]);self.assertTrue(m.routing['active']);m.socket.sendto.assert_called_once()
+
+ def test_fixture_mouse_is_temporary_with_direct_input(self):
+  m=self.setup_monitor();base=[0]*192;base[150]=255;base[151]=99;m._fixture_baseline=Mock(return_value=base)
+  fixture=dict(id='beam',name='Beam',universe=1,start=145,mappingPreset='beam230-16ch',channels=[dict(function='Unknown',default=0) for _ in range(16)])
+  direct=dict(id='ten',routingMode='direct',enabled=True,universe=1,start=145,count=16,targetFixtures=[])
+  native=[0]*16;native[6]=25;native[7]=150
+  m.fixture_controls['beam']=dict(destinationIp='192.168.18.80',start=145,nativeValues=native,manualUntil=time.monotonic()+.75,actionDeadline=None)
+  m.route_tick('192.168.18.80',[direct],[fixture]);self.assertEqual(parse_packet(m.socket.sendto.call_args.args[0])['values'][150:152],[25,150])
+  m.fixture_controls['beam']['manualUntil']=0
+  m.route_tick('192.168.18.80',[direct],[fixture]);self.assertEqual(parse_packet(m.socket.sendto.call_args.args[0])['values'][150:152],[255,99])

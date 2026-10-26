@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><title>Fixture · SiteFlow Node</title><link rel="stylesheet" href="/app.css"><script src="/fixture.js" defer></script></head>
+<body>
+<header class="brand"><span class="brand-dot"></span><strong>.outsider</strong><span class="siteflow">SiteFlow</span><b>Node</b><span class="header-context">FIXTURE CONTROL</span><span class="local-badge"><span></span>LOCAL ONLY</span></header>
+<main class="monitor-page fixture-detail-page">
+ <a id="back-fixtures" href="/fixtures" class="back-to-devices">← DMX Fixtures</a>
+ <section class="title-row fixture-detail-title"><div><div class="place-identity"><img class="place-logo" src="/Papinsvet-logo.png" alt="Папин свет"><span>@papinsvet Lab</span></div><div class="fixture-detail-heading"><span id="fixture-hero-icon" class="fixture-icon"></span><div><h1 id="fixture-title">Loading fixture…</h1><p class="subtitle" id="fixture-location">Loading address…</p></div></div></div><span class="signal-badge waiting" id="fixture-profile-status">DMX profile</span></section>
+ <p class="artnet-note" id="fixture-route-status">Reading controller configuration…</p>
+ <section id="beam-console" hidden>
+  <article class="fixture-card beam-console-card">
+   <div class="beam-console-header"><div><h2>Beam Control</h2><p class="artnet-note">Mouse controls send to the configured Art-Net output only after an explicit fader or button action.</p></div><label class="beam-mode-picker">Control preset<select id="beam-mode"><option value="original">Original</option><option value="parled">ParLed Driver Emulation</option></select></label></div>
+   <div id="beam-console-content"></div>
+   <div class="beam-actions beam-lamp-actions"><button class="primary" id="lamp-on">Lamp ON</button><button id="lamp-off">Lamp OFF</button><button id="lamp-stable" hidden>Lamp is stable</button><button id="lamp-reset">Manual ballast reset</button><span id="beam-status">No command sent.</span></div>
+   <div id="beam-lamp-state" class="beam-lamp-state" role="status">Lamp state not confirmed.</div>
+   <p class="artnet-note">Lamp commands are one-shot: CH16=202 / 102 / manual-only 255 for 4 seconds, then 0. Lamp OFF closes CH7/CH8; power and fans stay on. The 5-minute restart lock is our safety delay, not a verified cooling specification. Confirm the lamp is stable manually before opening shutter/dimmer; actual ignition is not measured. Follow any longer ballast cooldown.</p>
+  </article>
+ </section>
+ <section class="fixture-card fixture-patch-card">
+  <details id="patch-details"><summary>Fixture profile and DMX address</summary>
+   <form id="patch-form">
+    <div class="fixture-fields"><label>Name<input id="fx-name" maxlength="80" required></label><label>Output Universe<input id="fx-universe" type="number" min="0" max="255" required></label><label>Start DMX<input id="fx-start" type="number" min="1" max="512" required></label><label>Channel count<input id="fx-count" type="number" min="1" max="512" required></label></div>
+    <label class="fixture-preset">Device / mapping preset<select id="fx-preset"><option value="auto">Auto-detect</option><option value="custom">Custom mapping</option></select></label>
+    <p id="range-preview" class="artnet-note"></p><div id="channel-editor"></div><p id="fixture-error" class="signal-error" role="alert"></p>
+    <div class="artnet-tools"><button class="primary" type="submit" id="save-fixture">Save fixture</button><a class="button" id="cancel-fixture" href="/fixtures">Cancel</a></div>
+   </form>
+  </details>
+ </section>
+ <footer><span>Fixture control <span class="footer-sep">/</span><code>Explicit actions only</code></span><span>Physical DMX output is not measured.</span></footer>
+</main>
+</body></html>

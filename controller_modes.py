@@ -13,6 +13,10 @@ MAC = '00:00:c8:d8:a2:71'
 SOFTWARE = 'SOFTWARE CONTROL'
 BYPASS = 'DIRECT BYPASS'
 VERIFY_TTL = 75
+REBOOT_READBACK_TIMEOUT = 30
+SOFTWARE_INPUT_UNIVERSE = 0
+SOFTWARE_OUTPUT_UNIVERSE = 1
+BYPASS_UNIVERSE = 1
 
 
 class DMXForm(HTMLParser):
@@ -58,10 +62,20 @@ def parse_config(html):
         ports.append(dict(port=n, direction='Output' if direction else 'Input', universe=universe,
                           merge=merge, framerate=fps, unicast='C'+str(n) in fields,
                           destination=fields.get('I'+str(n), fields.get('bc'))))
-    mode = 'UNKNOWN'
-    if ports[0]['direction'] == 'Output' and ports[1]['direction'] == 'Input' and ports[1]['universe'] == 1:
-        mode = SOFTWARE if ports[0]['universe'] == 0 else BYPASS if ports[0]['universe'] == 1 else 'UNKNOWN'
-    return dict(mode=mode, ports=ports, fields=fields)
+    inputs=[p for p in ports if p['direction']=='Input']
+    outputs=[p for p in ports if p['direction']=='Output']
+    mode='UNKNOWN';input_universe=output_universe=input_port=output_port=None
+    if len(inputs)==1 and len(outputs)==1:
+        input_port,output_port=inputs[0]['port'],outputs[0]['port']
+        input_universe,output_universe=inputs[0]['universe'],outputs[0]['universe']
+        # Only the two operator-confirmed patches are recognized. A merely
+        # different pair of universes is not enough to enable software TX.
+        if (input_port, output_port, input_universe, output_universe) == (1, 2, SOFTWARE_INPUT_UNIVERSE, SOFTWARE_OUTPUT_UNIVERSE):
+            mode=SOFTWARE
+        elif (input_port, output_port, input_universe, output_universe) == (1, 2, BYPASS_UNIVERSE, BYPASS_UNIVERSE):
+            mode=BYPASS
+    return dict(mode=mode,ports=ports,fields=fields,inputPort=input_port,outputPort=output_port,
+                inputUniverse=input_universe,outputUniverse=output_universe)
 
 
 class ControllerModes:
@@ -102,20 +116,25 @@ class ControllerModes:
         state = dict(self.state)
         if self.checked and time.monotonic()-self.checked >= VERIFY_TTL:
             state.update(mode='UNKNOWN', connection='UNKNOWN', error='Controller verification expired; TX stopped')
-        return dict(state, busy=self.busy, tx='ON' if self.tx_allowed() and not self.monitor.tx_muted else 'STOP',
+        return dict(state, busy=self.busy, userBlackout=self.user_stopped,
+                    tx='ON' if self.tx_allowed() and not self.monitor.tx_muted else 'STOP',
                     fresh=time.monotonic()-self.checked < VERIFY_TTL)
 
     def _accept(self, config):
         self.checked = time.monotonic()
-        self.state = dict(mode=config['mode'], ports=config['ports'], connection='ONLINE', error=None,
+        self.state = dict(mode=config['mode'], ports=config['ports'],inputPort=config.get('inputPort'),
+                          outputPort=config.get('outputPort'),inputUniverse=config.get('inputUniverse'),
+                          outputUniverse=config.get('outputUniverse'),connection='ONLINE', phase='READY', error=None,
                           checkedAt=datetime.datetime.now(datetime.timezone.utc).isoformat(), autonomy='NOT VERIFIED')
+        if config.get('inputUniverse') is not None:self.monitor.input_universe=config['inputUniverse']
         self.monitor.set_tx_muted(config['mode'] != SOFTWARE or self.user_stopped)
 
-    def _fail(self, exc):
-        self.user_stopped = True
+    def _fail(self, exc, stop_until_manual=False):
+        if stop_until_manual:self.user_stopped = True
         self.monitor.set_tx_muted(True)
         self.checked = 0
         self.state = dict(self.state, mode='UNKNOWN', connection='OFFLINE' if isinstance(exc, OSError) else 'UNKNOWN', error=str(exc))
+        self.state['phase'] = 'FAILED'
 
     def refresh(self):
         if not self.operation.acquire(blocking=False):return self.snapshot()
@@ -143,14 +162,37 @@ class ControllerModes:
             backup = self.backup_dir / ('dmx-'+stamp+'.json')
             backup.write_text(json.dumps(dict(controllerIp=IP, mac=MAC, firmware='ArtDmx2-V3.4', **before), indent=2), encoding='utf-8')
             fields = dict(before['fields'])
-            fields.update(M1='1', U1='0' if mode == SOFTWARE else '1', M2='0', U2='1')
-            self.request('/cgi/dmx1.htm?' + urlencode(fields))
-            after = None
-            for attempt in range(3):
-                after = self.read()
-                if after['mode'] == mode:break
-                if attempt < 2:time.sleep(.2)
-            if after['mode'] != mode:raise ValueError('Controller readback does not match requested mode; TX remains stopped')
+            # Keep the detected physical port roles, even when they are
+            # opposite the controller's factory layout.
+            input_port,output_port=before.get('inputPort'),before.get('outputPort')
+            if input_port not in (1,2) or output_port not in (1,2) or input_port==output_port:
+                raise ValueError('Cannot switch mode without one detected input and one output port')
+            input_universe=SOFTWARE_INPUT_UNIVERSE if mode==SOFTWARE else BYPASS_UNIVERSE
+            output_universe=SOFTWARE_OUTPUT_UNIVERSE if mode==SOFTWARE else BYPASS_UNIVERSE
+            fields['M'+str(input_port)]='0';fields['U'+str(input_port)]=str(input_universe)
+            fields['M'+str(output_port)]='1';fields['U'+str(output_port)]=str(output_universe)
+            self.state = dict(self.state, phase='APPLYING', connection='APPLYING', error=None)
+            try:
+                self.request('/cgi/dmx1.htm?' + urlencode(fields))
+            except (OSError, http.client.HTTPException):
+                # Some firmware accepts Apply and reboots before its HTTP
+                # response arrives. Readback is authoritative; TX stays off.
+                pass
+            deadline=time.monotonic()+REBOOT_READBACK_TIMEOUT
+            after=None;last_error=None
+            while time.monotonic()<deadline:
+                try:
+                    candidate=self.read()
+                    if candidate['mode']==mode:
+                        after=candidate
+                        break
+                except (OSError, ValueError, http.client.HTTPException) as exc:
+                    last_error=exc
+                time.sleep(.5)
+            if after is None:
+                detail='Controller did not return with the requested configuration within '+str(REBOOT_READBACK_TIMEOUT)+' seconds'
+                if last_error:detail+=' ('+str(last_error)+')'
+                raise ValueError(detail+'; TX remains stopped')
             # Confirm every submitted field, including the settings we must preserve.
             for k, v in fields.items():
                 if after['fields'].get(k) != v:raise ValueError('Controller did not preserve field '+k+'; TX remains stopped')
@@ -160,7 +202,7 @@ class ControllerModes:
             self.state['backup'] = backup.name
             return self.snapshot()
         except (OSError, ValueError, http.client.HTTPException) as exc:
-            self._fail(exc)
+            self._fail(exc, stop_until_manual=True)
             raise ValueError(str(exc)) from exc
         finally:
             self.busy = False

@@ -1,7 +1,9 @@
 """Bounded Art-Net receiver with discovery and explicit mapped-fixture sequence test."""
 from collections import deque
+import statistics
 from fixtures import fixture_test_plan, fixture_test_frame
 from input_controls import semantic_rules, routing_mode
+from midi_inputs import mapped_values as midi_mapped_values, LastChange
 import datetime as dt
 import ipaddress
 import socket
@@ -91,6 +93,11 @@ class ArtNetMonitor:
         self.counters = dict(artDmx=0, pollReplies=0, other=0, malformed=0, ignored=0, evictedStreams=0)
         self.started = None
         self.stop_event = threading.Event()
+        self.route_condition = threading.Condition()
+        self.route_revision = 0
+        self.route_trigger = None
+        self.route_latency_samples = deque(maxlen=256)
+        self.semantic_rule_cache = {}
         self.last_poll = float('-inf')
         self.logger=logger
         self.subscriptions={}
@@ -98,11 +105,16 @@ class ArtNetMonitor:
         self.tool_tx_by_ip={}
         self.blackout_status={}
         self.manual_overrides={}
+        self.fixture_controls={}
+        self.beam_lamp_states={}
+        self.wiz_targets={}
+        self.wiz_routing_status={}
         self.tx_muted=False
         self.tx_permission=None
         self.test_cancelled=False
         self.tool_tx={}
         self.routing={'active':False,'status':'No targets','sentPackets':0}
+        self.input_takeover=LastChange();self.route_wiz_owned=set();
         self.route_owned=set();self.route_baseline=[];self.route_ip=None;self.route_universe=None;self.route_sequence=1
         self.output_test={'active':False,'status':'Not run','sentPackets':0}
         self.test_done=threading.Event()
@@ -133,10 +145,26 @@ class ArtNetMonitor:
 
     def close(self):
         self.stop_event.set()
+        with self.route_condition:self.route_condition.notify_all()
         self.test_done.wait(timeout=1.2)
         self.running = False
         if self.socket:
             self.socket.close()
+
+    def wake_routing(self):
+        """Wake the latest-frame router after a control/configuration change."""
+        with self.route_condition:
+            self.route_revision += 1
+            self.route_trigger = None
+            self.route_condition.notify()
+
+    def wait_for_route_frame(self, revision, timeout=None):
+        """Wait for a received ArtDmx frame or an explicit routing change."""
+        with self.route_condition:
+            if self.route_revision == revision and not self.stop_event.is_set():
+                self.route_condition.wait_for(
+                    lambda: self.route_revision != revision or self.stop_event.is_set(), timeout)
+            return self.route_revision, self.route_trigger
 
     def receive_loop(self):
         while not self.stop_event.is_set():
@@ -211,6 +239,10 @@ class ArtNetMonitor:
                           lastChanged=stamp if changes else previous.get('lastChanged') if previous else None,
                           _last=t, _times=recent, _changed=changed_at)
             self.streams[key] = stream
+            with self.route_condition:
+                self.route_revision += 1
+                self.route_trigger = (ip, packet['universe'], t)
+                self.route_condition.notify()
             if previous is None:
                 self.events.appendleft(dict(time=stamp, message='New ArtDmx stream: %s · U%s · Physical %s' % (ip, packet['universe'], packet['physical'])))
             if changes:
@@ -242,19 +274,21 @@ class ArtNetMonitor:
         self.socket.sendto(receiver_reply(self.host_ip,universes),(ip,6454))
         self.subscriptions[ip]=dict(universes=universes[:4],announcedAt=timestamp(),role='Virtual visualizer; no physical DMX output')
 
-    def start_fixture_test(self,ip,fixtures,presets=None):
+    def start_fixture_test(self,ip,fixtures,presets=None,output_universe=None,input_universe=None):
         with self.lock:
             if not self.running or not self.socket or self.stop_event.is_set():raise ValueError('Receiver unavailable')
             if self.tx_blocked():raise ValueError('Blackout · TX stopped')
             if self.output_test['active']:raise ValueError('A test is already running')
             if ipaddress.ip_address(ip) not in ipaddress.ip_network(self.subnet):raise ValueError('Target outside local subnet')
-            node=self.nodes.get(ip)
-            if not node or time.monotonic()-node['_last']>15:raise ValueError('Refresh the gateway configuration first')
-            outputs=[p for p in node['ports'] if p['output']]
-            if len(outputs)!=1:raise ValueError('Exactly one output is required')
-            universe=outputs[0]['outputUniverse']
+            if output_universe is None:
+                node=self.nodes.get(ip)
+                if not node or time.monotonic()-node['_last']>15:raise ValueError('Refresh the gateway configuration first')
+                outputs=[p for p in node['ports'] if p['output']]
+                if len(outputs)!=1:raise ValueError('Exactly one output is required')
+                universe=outputs[0]['outputUniverse']
+            else:universe=output_universe
             plan=fixture_test_plan(fixtures,universe,presets)
-            baseline=self._optional_baseline(ip,self.input_universe)
+            baseline=self._optional_baseline(ip,self.input_universe if input_universe is None else input_universe)
             self.output_test=dict(active=True,kind='fixtures',status='Starting',destinationIp=ip,universe=universe,
                                   totalFixtures=len(plan),skippedFixtures=len(fixtures)-len(plan),sentPackets=0,
                                   startedAt=timestamp(),physicalOutputMeasured=False)
@@ -318,7 +352,7 @@ class ArtNetMonitor:
                 if error:self.output_test['error']=error
             self.test_done.set()
 
-    def route_tick(self,ip,control,fixtures):
+    def route_tick(self,ip,control,fixtures,output_universe=None,midi_controls=None):
         with self.lock:
             for key,override in list(self.manual_overrides.items()):
                 if override['anchor'] is None:continue
@@ -333,26 +367,38 @@ class ArtNetMonitor:
             try:
                 controls=control if isinstance(control,list) else [control]
                 controls=[c for c in controls if c and c.get('enabled')]
+                midi_controls=midi_controls or []
+                midi_values=midi_mapped_values(midi_controls,fixtures,lambda fid,values:self._beam_native_values('parled',values,self.fixture_controls.get(fid,{}).get('colorSlots',{})))
                 direct_controls=[c for c in controls if routing_mode(c)=='direct']
                 mapped_controls=[c for c in controls if routing_mode(c)=='mapped']
                 active_controls=direct_controls+mapped_controls
-                if not active_controls:raise ValueError('Waiting for enabled direct or mapped inputs')
+                now_mono=time.monotonic()
+                active_fixture_controls={fid:item for fid,item in self.fixture_controls.items()
+                    if item.get('destinationIp')==ip
+                    and ((item.get('manualUntil') or 0)>now_mono or (item.get('actionDeadline') or 0)>now_mono)}
+                if not active_controls and not active_fixture_controls and not midi_values:raise ValueError('Waiting for enabled direct or mapped inputs')
                 if ipaddress.ip_address(ip) not in ipaddress.ip_network(self.subnet):raise ValueError('Target outside subnet')
-                node=self.nodes.get(ip)
-                outputs=[p for p in node.get('ports',[]) if p['output']] if node else []
-                if not node or time.monotonic()-node['_last']>15 or len(outputs)!=1:raise ValueError('Fresh output configuration required')
-                universe=outputs[0]['outputUniverse']
+                if output_universe is None:
+                    node=self.nodes.get(ip)
+                    outputs=[p for p in node.get('ports',[]) if p['output']] if node else []
+                    if not node or time.monotonic()-node['_last']>15 or len(outputs)!=1:raise ValueError('Fresh output configuration required')
+                    universe=outputs[0]['outputUniverse']
+                else:universe=output_universe
                 input_universes={c['universe'] for c in active_controls}
-                if len(input_universes)!=1:raise ValueError('Enabled input controls must share one source universe')
-                input_universe=next(iter(input_universes))
+                if len(input_universes)>1 or active_controls and len(input_universes)!=1:raise ValueError('Enabled input controls must share one source universe')
+                input_universe=next(iter(input_universes)) if input_universes else self.input_universe
                 target_ids=set(fid for c in mapped_controls for fid in c['targetFixtures'])
+                target_ids.update(fid for c in midi_controls for fid in c.get('targetFixtures',[]) if any(f['id']==fid for f in fixtures))
                 targets=[f for f in fixtures if f['id'] in target_ids]
                 if len(targets)!=len(target_ids) or any(f['universe']!=universe for f in targets):raise ValueError('Targets must exist in the configured output universe')
                 manual_mode=False
                 try:baseline=self._fixture_baseline(ip,input_universe)
                 except ValueError:
-                    if not any(o['sourceIp']==ip and o['universe']==input_universe for o in self.manual_overrides.values()):raise
+                    if not midi_values and not active_fixture_controls and not any(o['sourceIp']==ip and o['universe']==input_universe for o in self.manual_overrides.values()):raise
                     baseline=self._optional_baseline(ip,input_universe);manual_mode=True
+                streams=[v for v in self.streams.values() if v['sourceIp']==ip and v['universe']==input_universe]
+                desk_changes=streams[0].get('_changed',{}) if len(streams)==1 else {}
+                desk_times={}
                 # Nothing passes implicitly. Each DIRECT card explicitly owns
                 # and copies its own 1:1 range; FUNCTION REMAP cards only own
                 # semantic destination channels.
@@ -365,48 +411,117 @@ class ArtNetMonitor:
                     for index in range(1,c['count']+1):
                         source_channel=c['start']+index-1
                         frame[source_channel-1]=baseline[source_channel-1]
+                        desk_times[('dmx',source_channel-1)]=desk_changes.get(source_channel,0)
                         owned.add(source_channel-1)
                         override=self.manual_overrides.get((c['id'],index))
                         if not override:continue
                         if override['channel']!=source_channel or (override['anchor'] is not None and override['anchor']!=baseline[source_channel-1]):
                             self.manual_overrides.pop((c['id'],index),None);continue
                         frame[source_channel-1]=override['value']
+                        desk_times[('dmx',source_channel-1)]=override.get('changed',0)
                 # Function-remap banks do not also leak their source channels
                 # to identically numbered output addresses.
                 for c in mapped_controls:
                     count=c.get('count',len(c.get('faderFunctions',[])) or 16)
                     frame[c['start']-1:c['start']-1+count]=[0]*count
-                assignments={}
+                assignments={};wiz_assignments={}
                 for c in mapped_controls:
-                    rules=semantic_rules(c['targetFixtures'],fixtures,c.get('faderFunctions'))
+                    target_modes=c.get('targetModes',{})
+                    parled_ids={fid for fid in c.get('targetFixtures',[]) if target_modes.get(fid)=='parled'}
+                    cache_key=(id(c),id(fixtures))
+                    cached=self.semantic_rule_cache.get(cache_key)
+                    rules=cached[2] if cached and cached[0] is c and cached[1] is fixtures else None
+                    if rules is None:
+                        rules=semantic_rules([fid for fid in c['targetFixtures'] if fid not in parled_ids],fixtures,c.get('faderFunctions'))
+                        if len(self.semantic_rule_cache)>=256:self.semantic_rule_cache.clear()
+                        self.semantic_rule_cache[cache_key]=(c,fixtures,rules)
                     if c['start']+max((r['input'] for r in rules),default=1)-1>len(baseline):raise ValueError('Input frame does not contain all mapped faders')
                     for rule in rules:
                         f=next(f for f in targets if f['id']==rule['fixtureId'])
                         destination=f['start']+rule['channel']-2
-                        if destination in assignments:raise ValueError('Conflicting input assignments for '+f['name']+' / '+f['channels'][rule['channel']-1]['function'])
                         override=self.manual_overrides.get((c['id'],rule['input']))
                         source_channel=c['start']+rule['input']-1
                         if override and (override['channel']!=source_channel or (override['anchor'] is not None and override['anchor']!=baseline[source_channel-1])):
                             self.manual_overrides.pop((c['id'],rule['input']),None);override=None
-                        assignments[destination]=override['value'] if override else baseline[source_channel-1]
-                if any(c.get('targetFixtures') for c in mapped_controls) and not assignments:raise ValueError('Selected fixtures do not support assigned functions')
+                        value=override['value'] if override else baseline[source_channel-1]
+                        k=('virtual',f['id'],f['channels'][rule['channel']-1]['function']) if f.get('virtualWiz') else ('dmx',destination)
+                        desk_times[k]=override.get('changed',0) if override else desk_changes.get(source_channel,0)
+                        if f.get('virtualWiz'):
+                            wiz_assignments.setdefault(f['id'],{})[f['channels'][rule['channel']-1]['function']]=value
+                        else:
+                            if destination in assignments:raise ValueError('Conflicting input assignments for '+f['name']+' / '+f['channels'][rule['channel']-1]['function'])
+                            assignments[destination]=value
+                    if parled_ids:
+                        roles=['Master','Red','Green','Blue','White','Amber','UV','Strobe']
+                        functions=c.get('faderFunctions',[])
+                        for fid in parled_ids:
+                            f=next((item for item in targets if item['id']==fid),None)
+                            if not f or f.get('mappingPreset')!='beam230-16ch':raise ValueError('ParLed emulation requires a Beam 230 target')
+                            values=[0]*8;beam_changed=0
+                            for index,function in enumerate(functions):
+                                if function not in roles:continue
+                                source_channel=c['start']+index
+                                if source_channel>len(baseline):raise ValueError('Input frame does not contain all mapped faders')
+                                override=self.manual_overrides.get((c['id'],index+1))
+                                if override and (override['channel']!=source_channel or (override['anchor'] is not None and override['anchor']!=baseline[source_channel-1])):
+                                    self.manual_overrides.pop((c['id'],index+1),None);override=None
+                                values[roles.index(function)]=override['value'] if override else baseline[source_channel-1]
+                                beam_changed=max(beam_changed,override.get('changed',0) if override else desk_changes.get(source_channel,0))
+                            slots=self.fixture_controls.get(fid,{}).get('colorSlots',{})
+                            native=self._beam_native_values('parled',values,slots)
+                            for index,value in enumerate(native):
+                                destination=f['start']+index-1
+                                if destination in assignments:raise ValueError('Conflicting input assignments for '+f['name']+' / CH '+str(index+1))
+                                assignments[destination]=value
+                                desk_times[('dmx',destination)]=beam_changed
+                if not midi_values and any(c.get('targetFixtures') for c in mapped_controls) and not assignments and not wiz_assignments:raise ValueError('Selected fixtures do not support assigned functions')
                 owned.update(assignments)
-                prior=self.route_owned if self.route_ip==ip and self.route_universe==universe else set()
-                end=max(len(baseline),max(owned|prior,default=-1)+1);end+=end%2
+                end=max(len(baseline),max(owned|self.route_owned,default=-1)+1);end+=end%2
                 frame += [0]*(end-len(frame))
-                # Only explicit function assignments override the incoming desk frame.
-                # Removed assignments within the received frame return to the desk.
-                for channel in prior-owned:
-                    if channel>=len(baseline):frame[channel]=0
                 for destination,value in assignments.items():frame[destination]=value
-                self._route_send(ip,universe,bytes(frame))
+                if self.route_ip!=ip or self.route_universe!=universe:self.input_takeover=LastChange()
+                desk_values={('dmx',channel):frame[channel] for channel in owned}
+                desk_values.update({('virtual',fid,role):value for fid,roles in wiz_assignments.items() for role,value in roles.items()})
+                mixed=self.input_takeover.mix(desk_values,midi_values,desk_times)
+                current_wiz=set()
+                for k,value in mixed.items():
+                    if k[0]=='dmx':
+                        destination=k[1]
+                        if destination>=len(frame):frame.extend([0]*(destination+1-len(frame)))
+                        frame[destination]=value;owned.add(destination)
+                    else:
+                        _,fid,role=k;current_wiz.add((fid,role));self.wiz_targets.setdefault(fid,{})[role]=value
+                for fid,role in self.route_wiz_owned-current_wiz:self.wiz_targets.setdefault(fid,{})[role]=0
+                self.route_wiz_owned=current_wiz
+                # No source writes implicit values into another source's channels.
+                # Explicit mouse control owns only the selected fixture's 16
+                # output channels; incoming desk values cannot overwrite them.
+                for fid,item in active_fixture_controls.items():
+                    fixture=next((f for f in fixtures if f['id']==fid),None)
+                    if not fixture or fixture['universe']!=universe:continue
+                    values=item['nativeValues']
+                    for index,value in enumerate(values):
+                        destination=fixture['start']-1+index
+                        if destination>=len(frame):frame.extend([0]*(destination+1-len(frame)))
+                        frame[destination]=value;owned.add(destination)
+                input_streams=[s for s in self.streams.values()
+                               if s['sourceIp']==ip and s['universe']==input_universe
+                               and time.monotonic()-s['_last']<=15]
+                received_monotonic=max((s['_last'] for s in input_streams),default=None)
+                tx_source='Input forwarding + MIDI' if midi_values else 'Input forwarding + Beam mouse control' if active_fixture_controls else 'Input forwarding'
+                if len(frame)%2:frame.append(0)
+                if owned or self.route_owned or active_fixture_controls:
+                    self._route_send(ip,universe,bytes(frame),source=tx_source,received_monotonic=received_monotonic)
                 self.route_owned=owned;self.route_baseline=baseline;self.route_ip=ip;self.route_universe=universe
-                route_kind='Direct 1:1 + function remap' if direct_controls and mapped_controls else 'Direct 1:1' if direct_controls else 'Function remap'
+                route_kind='MIDI function remap' if midi_values else 'Direct 1:1 + function remap' if direct_controls and mapped_controls else 'Direct 1:1' if direct_controls else 'Function remap'
+                if wiz_assignments and not owned:route_kind='WiZ local function remap'
                 self.routing.update(active=True,status='Manual · desk offline' if manual_mode else route_kind,
                                     controlIds=[c['id'] for c in active_controls],targets=len(targets),universe=universe,
                                     inputUniverse=input_universe,mergePolicy=route_kind,error=None)
                 return
             except (ValueError,OSError) as exc:error=str(exc)
+            for fid,role in self.route_wiz_owned:self.wiz_targets.setdefault(fid,{})[role]=0
+            self.route_wiz_owned=set()
             if self.route_owned:
                 end=max(len(self.route_baseline),max(self.route_owned)+1);end+=end%2;frame=[0]*end
                 try:
@@ -414,7 +529,7 @@ class ArtNetMonitor:
                 except OSError as exc:error+='; final off failed: '+str(exc)
             self.routing.update(active=False,status=error,error=error)
 
-    def _route_send(self,ip,universe,values,source='Input forwarding'):
+    def _route_send(self,ip,universe,values,source='Input forwarding',received_monotonic=None):
         if self.tx_blocked():raise ValueError('Blackout · TX stopped')
         sequence=self.route_sequence
         packet=ARTNET_ID+struct.pack('<H',0x5000)+b'\x00\x0e'+bytes([sequence,0,universe&255,universe>>8])+struct.pack('>H',len(values))+values
@@ -422,6 +537,10 @@ class ArtNetMonitor:
         self.tool_tx=dict(values=list(values),lastSentAt=stamp,source=source,universe=universe,destinationIp=ip)
         self.tool_tx_by_ip[ip]=dict(self.tool_tx)
         self.routing['sentPackets']+=1
+        if source.startswith('Input forwarding') and received_monotonic is not None:
+            latency_ms=max(0.0,(time.monotonic()-received_monotonic)*1000)
+            self.route_latency_samples.append((time.monotonic(),latency_ms))
+            self.routing['lastAppLatencyMs']=round(latency_ms,2)
         if self.logger:self.logger.submit(dict(type='ToolArtDmxTX',sentAt=stamp,destinationIp=ip,destinationPort=6454,universe=universe,sequence=sequence,values=list(values),source=source,physicalOutputMeasured=False))
 
     def set_manual_fader(self,ip,control,index,value,expected_input=None,expected_offline=False):
@@ -435,8 +554,73 @@ class ArtNetMonitor:
             channel=control['start']+index-1
             if channel>len(baseline):raise ValueError('Channel not present in input frame')
             if online and expected_input is not None and (type(expected_input) is not int or expected_input!=baseline[channel-1]):raise ValueError('Desk channel moved; manual override cancelled')
-            self.manual_overrides[(control['id'],index)]=dict(controlId=control['id'],fader=index,value=value,sourceIp=ip,universe=control['universe'],channel=channel,anchor=baseline[channel-1] if online else None)
+            self.manual_overrides[(control['id'],index)]=dict(controlId=control['id'],fader=index,value=value,sourceIp=ip,universe=control['universe'],channel=channel,anchor=baseline[channel-1] if online else None,changed=time.monotonic())
             return dict(self.manual_overrides[(control['id'],index)])
+
+    @staticmethod
+    def _beam_native_values(mode,values,color_slots=None):
+        if mode=='original':
+            if not isinstance(values,list) or len(values)!=16 or any(type(v) is not int or not 0<=v<=255 for v in values):
+                raise ValueError('Original mode requires 16 DMX values from 0 to 255')
+            native=list(values);native[15]=0
+            return native
+        if mode!='parled':raise ValueError('Unknown Beam control mode')
+        if not isinstance(values,list) or len(values)!=8 or any(type(v) is not int or not 0<=v<=255 for v in values):
+            raise ValueError('ParLed emulation requires Master, RGBWAUV and Strobe values')
+        roles=['Red','Green','Blue','White','Amber','UV']
+        slots=color_slots if isinstance(color_slots,dict) else {}
+        for role in roles:
+            slot=slots.get(role)
+            if slot is not None and (type(slot) is not int or not 1<=slot<=14):raise ValueError('Color wheel slots must be 1–14 or unassigned')
+        master=values[0];colors=dict(zip(roles,values[1:7]));role=max(roles,key=lambda key:colors[key])
+        peak=colors[role];dimmer=(master*peak+127)//255
+        wheel=0
+        if role!='White' and peak:
+            slot=slots.get(role)
+            if slot is not None:wheel=8+(slot-1)*8+4
+        strobe=values[7]
+        shutter=(51+(strobe*189+127)//255) if strobe else (25 if dimmer else 0)
+        # CH8 dimmer and CH10 color adjustment are provisional in the source map.
+        return [128,128,0,0,0,0,shutter,dimmer,wheel,0,0,0,96,0,0,0]
+
+    def set_fixture_control(self,ip,fixture,mode,values,action=None,universe=None,color_slots=None):
+        with self.lock:
+            if self.tx_blocked():raise ValueError('SOFTWARE CONTROL TX must be on')
+            if not self.running or not self.socket:raise ValueError('Art-Net transmitter is unavailable')
+            if type(universe) is not int or not 0<=universe<=255:raise ValueError('Controller output universe is unknown')
+            if fixture.get('mappingPreset')!='beam230-16ch' or len(fixture.get('channels',[]))!=16:raise ValueError('Beam 230 16CH profile required')
+            key=fixture['id'];current=self.fixture_controls.get(key)
+            if action=='lamp-release':
+                if current:
+                    current['nativeValues'][15]=0;current['action']=None;current['actionDeadline']=None
+                self.wake_routing()
+                return dict(accepted=True,action='released',fixtureId=key)
+            if values is None:
+                if current:values=current['values'];mode=current['mode'];color_slots=current.get('colorSlots')
+                else:values=[ch['default'] for ch in fixture['channels']];mode='original'
+            native=list(current['nativeValues']) if current and action in ('lamp-on','safe-off','lamp-reset') else self._beam_native_values(mode,values,color_slots)
+            if action not in (None,'lamp-on','safe-off','lamp-reset'):raise ValueError('Unknown Beam action')
+            if action in ('lamp-on','safe-off','lamp-reset'):
+                # Commands are one-shot, manually initiated, and auto-neutral after 4 seconds.
+                native[15]={'lamp-on':202,'safe-off':102,'lamp-reset':255}[action]
+                if action in ('lamp-on','safe-off'):native[6]=0;native[7]=0
+                deadline=time.monotonic()+4
+            else:deadline=None
+            self.fixture_controls[key]=dict(fixtureId=key,destinationIp=ip,universe=universe,start=fixture['start'],
+                mode=mode,values=list(values),colorSlots=dict(color_slots or {}),nativeValues=native,
+                action=action,actionDeadline=deadline,
+                manualUntil=deadline if deadline is not None else time.monotonic()+.75,updatedAt=timestamp())
+            if deadline is not None:
+                timer=threading.Timer(4, self._expire_fixture_command, args=(key,));timer.daemon=True;timer.start()
+            self.wake_routing()
+            return dict(accepted=True,fixtureId=key,mode=mode,action=action,values=native,expiresIn=5 if deadline else None)
+
+    def _expire_fixture_command(self,key):
+        with self.lock:
+            item=self.fixture_controls.get(key)
+            if not item or not item.get('actionDeadline') or time.monotonic()<item['actionDeadline']:return
+            item['nativeValues'][15]=0;item['action']=None;item['actionDeadline']=None
+        self.wake_routing()
 
     def send_pixel_frames(self,frames,sequence):
         with self.lock:
@@ -482,6 +666,7 @@ class ArtNetMonitor:
             self.tx_muted=enabled
             if enabled:
                 self.manual_overrides.clear()
+                self.fixture_controls.clear()
                 if self.output_test['active']:self.test_cancelled=True
                 self.routing.update(active=False,status='Blackout · TX stopped')
             return enabled
@@ -502,11 +687,24 @@ class ArtNetMonitor:
                 clean = {k: v for k, v in n.items() if not k.startswith('_')}
                 clean['ageSeconds'] = round(t - n['_last'], 2)
                 nodes.append(clean)
+            routing=dict(self.routing)
+            if self.route_latency_samples:
+                ordered=sorted(value for _,value in self.route_latency_samples)
+                routing['appLatencyMs']={
+                    'samples':len(ordered),
+                    'min':round(ordered[0],2),
+                    'median':round(statistics.median(ordered),2),
+                    'p95':round(ordered[min(len(ordered)-1,int((len(ordered)-1)*.95))],2),
+                    'max':round(ordered[-1],2),
+                    'windowSeconds':round(min(60,self.route_latency_samples[-1][0]-self.route_latency_samples[0][0]),1),
+                }
+            else:routing['appLatencyMs']=None
             return dict(listening=self.running, error=self.error, udpPort=self.port,
                         subnet=self.subnet, hostIp=self.host_ip, startedAt=self.started,
                         receivedAt=timestamp(), counters=dict(self.counters), streams=streams,
                         nodes=nodes, events=list(self.events), inputUniverse=self.input_universe,toolTxByIp=dict(self.tool_tx_by_ip),blackout=dict(self.blackout_status),manualOverrides=list(self.manual_overrides.values()),outputEnabled=not self.tx_blocked(),txMuted=self.tx_blocked(),
-                        outputTest=dict(self.output_test),toolTx=dict(self.tool_tx),routing=dict(self.routing),physicalOutputFeedback=None,
+                        outputTest=dict(self.output_test),toolTx=dict(self.tool_tx),routing=routing,physicalOutputFeedback=None,
                         logging=self.logger.status() if self.logger else None,
                         subscriptions=dict(self.subscriptions),
+                        wizRouting=dict(self.wiz_routing_status),
                         visibility='Only Art-Net packets delivered to this Mac are visible. Route the input stream to this Mac; other unicast traffic is not captured.')

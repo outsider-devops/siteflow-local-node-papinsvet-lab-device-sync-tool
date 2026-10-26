@@ -6,13 +6,12 @@
 <main class="monitor-page">
  <a id="back-monitor" href="/artnet" class="back-to-devices">← Art-Net Signal Monitor</a>
  <section class="title-row"><div><div class="place-identity"><img class="place-logo" src="/Papinsvet-logo.png" alt="Папин свет"><span>@papinsvet Lab</span></div><h1>DMX Fixtures</h1><p class="subtitle" id="fixture-device">Loading…</p></div><button class="primary" id="add-fixture">Add fixture</button></section>
- <p class="artnet-note">Location patch · Inventory only. Saving does not send DMX or change fixture hardware addresses.</p>
+ <p class="artnet-note">Patch edits stay local. Beam controls send Art-Net only after you move a control or hold a command.</p>
  <div class="fixture-toolbar"><label>Universe <select id="fixture-universe"><option value="all">All universes</option></select></label><span id="patch-summary"></span></div>
- <p class="artnet-note">Desk: U1 / CH 1–192. Jellyfish profile: 11-channel mode; CH 6 Strobe; CH 7–11 functions unknown. Project values for CH 6–11: 0.</p>
- <section class="fixture-test-panel"><button class="primary" id="test-fixtures" disabled>Test mapped fixtures</button><p>All supported fixtures in the output universe · White 1s → Red 1s → Off, one fixture at a time. Unknown profiles are skipped.</p><p class="artnet-note">Latest desk input is preserved on other channels. Without input, the last known frame (or zeros) is used. Other network controllers and physical DMX output are not measured.</p><div id="fixture-test-status" role="status">Not started</div></section>
- <section id="fixture-editor" hidden></section>
+ <p class="artnet-note" id="fixture-routing-note">Reading controller input and output Universes…</p>
+ <section class="fixture-test-panel"><button class="primary" id="test-fixtures" disabled>Test mapped fixtures</button><p>One fixture at a time · White → Red → Off.</p><div id="fixture-test-status" role="status">Not started</div></section>
  <section id="fixture-cards" class="fixture-cards" aria-label="Location fixtures"></section>
- <footer><span>Local DMX patch <span class="footer-sep">/</span><code>Inventory only</code></span><span>Universe and channel addresses are stored locally.</span></footer>
+ <footer><span>Local DMX patch <span class="footer-sep">/</span><code>Explicit Art-Net control</code></span><span>Universe and channel addresses are stored locally.</span></footer>
 </main>
 <div id="toast" class="toast" role="status" hidden></div>
 </body></html>

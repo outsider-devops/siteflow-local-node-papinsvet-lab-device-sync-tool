@@ -174,3 +174,23 @@ class NodeTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
+
+    def test_fixture_api_accepts_empty_command_deadlines(self):
+        import time
+        items={'expired':dict(manualUntil=None,actionDeadline=None),
+               'active':dict(manualUntil=time.monotonic()+60,actionDeadline=None)}
+        with patch.object(server.MONITOR,'fixture_controls',items):
+            status,result=self.request('GET','/api/fixtures?device=00:00:c8:d8:a2:71')
+        self.assertEqual(status,200)
+        self.assertEqual(set(result['fixtureControls']),{'active'})
+
+    def test_old_cooling_timer_does_not_block_explicit_lamp_on(self):
+        import time
+        from unittest.mock import Mock
+        did='00:00:c8:d8:a2:71';fid='beam-restart-test'
+        fixture=dict(id=fid,name='Beam',universe=1,start=145,mappingPreset='beam230-16ch',channels=[])
+        states={fid:dict(phase='cooling',coolingUntil=time.time()+300,actionUntil=None)}
+        with patch.dict(server.STATE,fixtureMaps={did:[fixture]},beamLampStates=states),patch.object(server,'controller_io',return_value={'outputUniverse':1}),patch.object(server.MONITOR,'set_fixture_control',return_value={}) as send,patch.object(server.threading,'Timer',return_value=Mock()):
+            status,result=self.request('POST','/api/fixtures/control',dict(deviceId=did,fixtureId=fid,action='lamp-on',mode='original',values=[0]*16),self.auth())
+        self.assertEqual(status,200,result);send.assert_called_once()
+        self.assertIsNone(result['lampState']['coolingUntil'])
