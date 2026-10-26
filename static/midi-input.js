@@ -5,9 +5,25 @@
   const defaults=['Master','Red','Green','Blue','White','Amber','UV','Strobe',...Array(8).fill(null)];
   const identity=c=>({source:c.source,type:c.type,channel:c.channel,number:c.number});
   const key=c=>c?JSON.stringify([c.source,c.type,c.channel,c.number]):'';
-  let csrf='',sections=[],bindings=[],fixtures=[],functions=[],presets=[],selectedId=null,editing=null,slotIndex=0,revision='',runtime={sections:{}},busy=false,source=null,lastRemoved=null;
+  let csrf='',sections=[],bindings=[],fixtures=[],presets=[],selectedId=null,editing=null,slotIndex=0,revision='',runtime={sections:{}},busy=false,source=null,lastRemoved=null,elementHeld=false;
   const current=()=>editing||sections.find(s=>s.id===selectedId);
   const bindingFor=slot=>slot&&bindings.find(b=>key(b)===key(slot.binding));
+  function targetFunctions(section=current()){
+    const roles=[];
+    for(const fid of section?.targetFixtures||[]){
+      const fixture=fixtures.find(f=>f.id===fid);if(!fixture)continue;
+      const names=fixture.mappingPreset==='beam230-16ch'&&section.targetModes[fid]==='parled'?defaults:fixture.channels.map(c=>c.function);
+      for(const role of names)if(role&&!['unknown','unassigned'].includes(role.toLowerCase())&&!roles.some(r=>r.toLowerCase()===role.toLowerCase()))roles.push(role);
+    }
+    return roles;
+  }
+  function showElement(binding,value=null){
+    if(elementHeld||!binding)return;
+    const address=binding.type==='Control Change'?'CC '+binding.number:binding.type==='Pitch Bend'?'Pitch Bend':'Note '+binding.number;
+    $('#midi-last-element-name').textContent=binding.name;
+    $('#midi-last-element-detail').textContent=`${binding.templateLayer||'Learned'} · CH ${binding.channel} / ${address}${value===null?'':' · '+value}`;
+    $('#hold-midi-element').disabled=false;
+  }
   function message(text){$('#midi-section-message').textContent=text;}
   function tabs(){
     $('#midi-section-tabs').innerHTML=sections.map(s=>`<button data-section="${esc(s.id)}" class="${s.id===selectedId?'primary':''}" ${editing?'disabled':''}>${esc(s.name)}</button>`).join('');
@@ -22,7 +38,9 @@
     $('#enable-midi-section').disabled=!editing;$('#enable-midi-section').checked=!!section?.enabled;
     $('#remove-midi-section').hidden=!editing?.id;
     for(const id of ['#midi-slot-binding','#midi-slot-function','#midi-slot-button','#midi-slot-step','#midi-function-preset','#midi-target-picker'])$(id).disabled=!editing;
-    $('#midi-function-preset').innerHTML='<option value="">Custom roles</option><option value="parled">PAR LED · Master / RGBWAUV / Strobe</option>'+presets.map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('');
+    const allowed=targetFunctions(section),supports=role=>allowed.some(r=>r.toLowerCase()===role.toLowerCase());
+    const matching=presets.filter(p=>p.functions.some(Boolean)&&p.functions.filter(Boolean).every(supports));
+    $('#midi-function-preset').innerHTML='<option value="">Custom roles</option>'+(defaults.filter(Boolean).every(supports)?'<option value="parled">PAR LED · Master / RGBWAUV / Strobe</option>':'')+matching.map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('');
     if(!section){$('#midi-section-faders').innerHTML='';return;}
     $('#midi-section-faders').innerHTML=[0,8].map(offset=>`<section class="midi-section-bank"><h3>Page ${offset?'B · F9–F16':'A · F1–F8'}</h3><div class="midi-section-bank-grid">${Array.from({length:8},(_,j)=>{
       const i=offset+j,b=bindingFor(section.slots[i]);
@@ -44,7 +62,8 @@
       const entries=bindings.filter(b=>(b.templateLayer||'Learned')===layer);
       return entries.length?`<optgroup label="${layer}">${entries.map(b=>`<option value="${esc(key(b))}" ${key(b)===selected?'selected':''}>${esc(b.name)} · CH ${b.channel} / ${b.type==='Control Change'?'CC '+b.number:b.type==='Pitch Bend'?'Pitch Bend':'Note '+b.number}</option>`).join('')}</optgroup>`:'';
     }).join('');
-    $('#midi-slot-function').innerHTML='<option value="">Unassigned function</option>'+functions.map(f=>`<option ${section.faderFunctions[index]===f?'selected':''}>${esc(f)}</option>`).join('');
+    $('#midi-slot-function').innerHTML='<option value="">Unassigned function</option>'+targetFunctions(section).map(f=>`<option ${section.faderFunctions[index]===f?'selected':''}>${esc(f)}</option>`).join('');
+    $('#midi-slot-function').disabled=!editing||!targetFunctions(section).length;
     $('#midi-slot-button').value=section.slots[index]?.buttonMode||'momentary';$('#midi-slot-step').value=section.slots[index]?.step||2;
     const binding=bindingFor(section.slots[index]);
     $('#midi-slot-button').parentElement.hidden=!(binding?.type==='Note'||binding?.interpretation?.startsWith('Button'));
@@ -58,8 +77,8 @@
       const fixture=fixtures.find(f=>f.id===fid),mode=section.targetModes[fid]||'original';
       return `<div class="midi-target-row"><strong>${esc(fixture?.name||'Unavailable fixture')}</strong>${fixture?.id==='led:matrix'?`<select data-midi-target-mode="${esc(fid)}" ${editing?'':'disabled'} aria-label="LED Matrix control preset"><option value="parled" ${mode==='parled'?'selected':''}>PAR LED · Color intensity</option><option value="pixel-fill" ${mode!=='parled'?'selected':''}>Pixel Fill · Color height</option></select>`:''}${fixture?.mappingPreset==='beam230-16ch'?`<select data-midi-target-mode="${esc(fid)}" ${editing?'':'disabled'} aria-label="${esc(fixture.name)} control preset"><option value="original" ${mode!=='parled'?'selected':''}>Original</option><option value="parled" ${mode==='parled'?'selected':''}>ParLed Driver Emulation</option></select>`:''}<button data-remove-midi-target="${esc(fid)}" ${editing?'':'disabled'} aria-label="Remove ${esc(fixture?.name||'fixture')}">×</button></div>`;
     }).join('')||'<p class="artnet-note">No target fixtures selected.</p>';
-    $('#midi-target-list').querySelectorAll('[data-remove-midi-target]').forEach(b=>b.onclick=()=>{editing.targetFixtures=editing.targetFixtures.filter(id=>id!==b.dataset.removeMidiTarget);delete editing.targetModes[b.dataset.removeMidiTarget];targets();});
-    $('#midi-target-list').querySelectorAll('[data-midi-target-mode]').forEach(s=>s.onchange=()=>editing.targetModes[s.dataset.midiTargetMode]=s.value);
+    $('#midi-target-list').querySelectorAll('[data-remove-midi-target]').forEach(b=>b.onclick=()=>{editing.targetFixtures=editing.targetFixtures.filter(id=>id!==b.dataset.removeMidiTarget);delete editing.targetModes[b.dataset.removeMidiTarget];render();});
+    $('#midi-target-list').querySelectorAll('[data-midi-target-mode]').forEach(s=>s.onchange=()=>{editing.targetModes[s.dataset.midiTargetMode]=s.value;render();});
   }
   function paint(){
     const section=current();if(!section)return;
@@ -99,24 +118,27 @@
       const response=await fetch('/api/midi-inputs?device='+encodeURIComponent(deviceId)+'&source='+encodeURIComponent(sourceId)+'&revision='+encodeURIComponent(revision));
       const data=await response.json();if(!response.ok)throw Error(data.error||'MIDI inputs unavailable');
       runtime=data.runtime||{sections:{}};
-      if(data.source){source=data.source;bindings=source.midiControls||[];fixtures=data.fixtures;functions=data.functions;presets=data.presets;sections=data.sections;revision=data.configRevision;
+      if(data.source){source=data.source;bindings=source.midiControls||[];fixtures=data.fixtures;presets=data.presets;sections=data.sections;revision=data.configRevision;
         $('#midi-input-title').textContent='MIDI · '+source.name;
         if(!selectedId)selectedId=sections[0]?.id||null;
         if(!editing)render();
       }
       const card=(data.devices||[]).find(d=>d.id===sourceId),active=(card?.activity||[]).filter(a=>a.age<1.5);
+      const latest=card?.activity?.[0];if(latest&&latest.age<1.5)showElement(bindings.find(b=>b.name===latest.name),latest.value);
       $('#midi-input-status').textContent=`${card?.online?'MIDI connected':'MIDI offline'} · ${data.txAllowed?'TX enabled':'TX stopped · controller mode / Blackout'} · ${active.map(a=>a.name+' '+a.value).join(' · ')||'Ready'} · Last movement takes control`;
       paint();
     }catch(e){message(e.message);}finally{busy=false;}
   }
   window.addEventListener('message',event=>{
     if(event.origin!==location.origin||event.source!==$('#midi-input-surface').contentWindow||event.data?.type!=='siteflow-midi-selection')return;
+    const touched=bindings.find(b=>key(b)===key(event.data.control));showElement(touched);
     if(!editing){message('Press Edit to assign a MIDI element to the selected fader.');return;}
     const binding=bindings.find(b=>key(b)===key(event.data.control));if(!binding){message('This element has no MIDI mapping. Load its template or use MIDI Learn first.');return;}
     if(key(editing.slots[slotIndex]?.binding)===key(binding))return;
     editing.slots[slotIndex]={binding:identity(binding),buttonMode:editing.slots[slotIndex]?.buttonMode||'momentary',step:editing.slots[slotIndex]?.step||2};render();
     message(`F${slotIndex+1} ← ${binding.name}. Choose its fixture function, then Save section.`);
   });
+  $('#hold-midi-element').onclick=()=>{elementHeld=!elementHeld;$('#hold-midi-element').textContent=elementHeld?'Resume':'Hold';$('#hold-midi-element').setAttribute('aria-pressed',String(elementHeld));};
   $('#back-inputs').href='/input-controls?device='+encodeURIComponent(deviceId);
   $('#midi-device-link').href='/midi?device='+encodeURIComponent(sourceId);
   $('#midi-input-surface').src='/midi?device='+encodeURIComponent(sourceId)+'&embed=1';
@@ -131,7 +153,7 @@
   $('#midi-slot-step').onchange=e=>{if(editing?.slots[slotIndex])editing.slots[slotIndex].step=Number(e.target.value);};
   $('#midi-function-preset').onchange=e=>{if(editing&&e.target.value){editing.faderFunctions=e.target.value==='parled'?[...defaults]:[...presets.find(p=>p.id===e.target.value).functions];render();}};
   $('#midi-target-picker').onchange=e=>$('#add-midi-target').disabled=!editing||!e.target.value;
-  $('#add-midi-target').onclick=()=>{const fid=$('#midi-target-picker').value;if(editing&&fid){editing.targetFixtures.push(fid);editing.targetModes[fid]=fid==='led:matrix'?'pixel-fill':'original';targets();}};
+  $('#add-midi-target').onclick=()=>{const fid=$('#midi-target-picker').value;if(editing&&fid){editing.targetFixtures.push(fid);editing.targetModes[fid]=fid==='led:matrix'?'pixel-fill':'original';render();}};
   fetch('/api/state').then(r=>r.json()).then(s=>{csrf=s.csrf;return update();}).catch(e=>message(e.message));
   setInterval(update,150);
 })();
