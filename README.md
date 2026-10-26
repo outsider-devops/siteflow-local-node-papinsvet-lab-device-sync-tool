@@ -1,4 +1,4 @@
-# SiteFlow Local Node
+# SiteFlow — Papinsvet Lab Device Sync Tool
 
 Локальный инструмент управления светом через Art-Net для Windows и macOS.
 
