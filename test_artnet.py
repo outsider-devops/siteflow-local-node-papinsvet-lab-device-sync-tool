@@ -39,7 +39,7 @@ class ArtNetTests(unittest.TestCase):
 
     def test_stale_values_never_remain_live(self):
         m=ArtNetMonitor();m.ingest(dmx(),('192.168.18.80',6454))
-        with patch('artnet_monitor.time.monotonic',return_value=time.monotonic()+10):
+        with patch('artnet_monitor.time.monotonic',return_value=time.monotonic()+16):
             s=m.snapshot()['streams'][0]
         self.assertFalse(s['live']);self.assertEqual(s['values'],[0,255])
 

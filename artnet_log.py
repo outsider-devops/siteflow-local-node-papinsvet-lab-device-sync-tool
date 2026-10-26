@@ -5,25 +5,33 @@ import queue
 import re
 import shutil
 import threading
+import time
 
 
 class ArtNetLog:
-    def __init__(self, directory, max_bytes=10*1024*1024, segments=5, min_free=1024*1024*1024):
+    def __init__(self, directory, max_bytes=10*1024*1024, segments=5, min_free=1024*1024*1024,
+                 max_age_seconds=24*60*60, repeat_seconds=5):
         self.directory=Path(directory)
         self.max_bytes=max_bytes
         self.segments=segments
         self.min_free=min_free
+        self.max_age_seconds=max_age_seconds
+        self.repeat_seconds=repeat_seconds
         self.lock=threading.RLock()
         self.queue=queue.Queue(maxsize=2048)
         self.stop=threading.Event()
         self.written=0
         self.dropped=0
+        self.coalesced=0
         self.error=None
         self.worker=None
+        self.last_records={}
+        self.last_prune=0
 
     def start(self):
         try:
             self.directory.mkdir(parents=True,exist_ok=True)
+            self.prune_expired(force=True)
             self.worker=threading.Thread(target=self.loop,daemon=True)
             self.worker.start()
         except OSError as exc:self.error=str(exc)
@@ -31,8 +39,33 @@ class ArtNetLog:
     def submit(self,record):
         if not self.worker:
             return
+        # Preserve every channel-value change, but do not write identical
+        # 25–40 Hz keepalive frames to disk. One unchanged health sample per
+        # source is retained every few seconds.
+        temporal={'receivedAt','sentAt','sequence','lastSeen'}
+        key=(record.get('type'),record.get('sourceIp'),record.get('destinationIp'),
+             record.get('universe'),record.get('physical'),record.get('opcode'),record.get('source'))
+        signature=json.dumps({k:v for k,v in record.items() if k not in temporal},
+                             ensure_ascii=False,sort_keys=True,separators=(',',':'))
+        now=time.monotonic()
+        with self.lock:
+            previous=self.last_records.get(key)
+            if previous and previous[0]==signature and now-previous[1]<self.repeat_seconds:
+                self.coalesced+=1
+                return
+            self.last_records[key]=(signature,now)
         try:self.queue.put_nowait(record)
         except queue.Full:self.dropped+=1
+
+    def prune_expired(self,force=False):
+        now=time.time()
+        if not force and now-self.last_prune<60:return
+        self.last_prune=now
+        cutoff=now-self.max_age_seconds
+        with self.lock:
+            for i in range(self.segments):
+                path=self.path(i)
+                if path.exists() and path.stat().st_mtime<cutoff:path.unlink()
 
     def path(self,index=0):
         return self.directory/('artnet.jsonl' if index==0 else 'artnet.%d.jsonl'%index)
@@ -40,6 +73,7 @@ class ArtNetLog:
     def write_record(self,record):
         line=(json.dumps(record,ensure_ascii=False,separators=(',',':'))+'\n').encode()
         with self.lock:
+            self.prune_expired()
             if shutil.disk_usage(self.directory).free<self.min_free:
                 raise OSError('Logging paused: less than 1 GiB of disk space available')
             path=self.path()
@@ -69,8 +103,9 @@ class ArtNetLog:
             files=[dict(name=self.path(i).name,bytes=self.path(i).stat().st_size)
                    for i in range(self.segments) if self.path(i).exists()]
         return dict(enabled=self.worker is not None,error=self.error,writtenThisSession=self.written,
-                    dropped=self.dropped,queued=self.queue.qsize(),files=files,
-                    maxBytes=self.max_bytes*self.segments,fullFrameValues=True)
+                    dropped=self.dropped,coalesced=self.coalesced,queued=self.queue.qsize(),files=files,
+                    maxBytes=self.max_bytes*self.segments,maxAgeHours=round(self.max_age_seconds/3600),
+                    repeatSeconds=self.repeat_seconds,fullFrameValues=True)
 
     def recent(self,limit=50):
         limit=max(1,min(limit,200))

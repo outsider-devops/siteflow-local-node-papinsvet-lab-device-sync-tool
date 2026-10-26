@@ -69,6 +69,15 @@ class NodeTests(unittest.TestCase):
         status, _ = self.request('GET', '/api/state', headers={'Host': 'untrusted.example'})
         self.assertEqual(status, 403)
 
+    def test_lan_host_is_allowed_with_same_origin(self):
+        lan=server.MONITOR.host_ip+':'+str(server.PORT)
+        status, _ = self.request('GET', '/api/state', headers={'Host':lan})
+        self.assertEqual(status,200)
+        status, _ = self.request('POST','/api/artnet/tx/resume',{},
+                                 {'Host':lan,'Origin':'http://'+lan,
+                                  'X-SiteFlow-Token':server.TOKEN,'Content-Type':'application/json'})
+        self.assertNotEqual(status,403)
+
     def test_virtual_input_rules_persist_without_transmission(self):
         did='00:00:c8:d8:a2:71'
         status,result=self.request('GET','/api/input-controls?device='+did)

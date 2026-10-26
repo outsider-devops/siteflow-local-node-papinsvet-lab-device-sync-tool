@@ -23,6 +23,7 @@ import urllib.parse
 import xml.etree.ElementTree as ET
 from artnet_monitor import ArtNetMonitor
 from artnet_log import ArtNetLog
+from controller_modes import ControllerModes
 
 ROOT = Path(__file__).resolve().parent
 LOCK = threading.RLock()
@@ -33,6 +34,7 @@ STATE = {}
 PORTS = (80, 443, 8080, 8081, 6668, 554, 37777, 22)
 MONITOR = ArtNetMonitor()
 LED = LEDRuntime()
+CONTROLLER = None
 
 
 def import_led_registry():
@@ -384,7 +386,15 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def allowed_host(self):
-        return self.headers.get('Host') in ('127.0.0.1:' + str(PORT), 'localhost:' + str(PORT))
+        try:host=urllib.parse.urlsplit('//'+self.headers.get('Host','')).hostname
+        except ValueError:return False
+        return host in ('127.0.0.1','localhost',MONITOR.host_ip)
+
+    def allowed_origin(self):
+        try:
+            origin=urllib.parse.urlsplit(self.headers.get('Origin',''))
+            return origin.scheme=='http' and origin.netloc==self.headers.get('Host') and self.allowed_host()
+        except ValueError:return False
 
     def reply(self, data, status=200, content_type='application/json; charset=utf-8', extra=None):
         body = json.dumps(data, ensure_ascii=False).encode() if isinstance(data, (dict, list)) else data
@@ -419,9 +429,17 @@ class Handler(BaseHTTPRequestHandler):
                 if not any(d['id']==device_id and d['kind']=='artnet' for d in STATE['devices']):return self.reply({'error':'Art-Net device not found'},404)
                 return self.reply({'fixtures':STATE.get('fixtureMaps',{}).get(device_id,initial_patch(device_id)), 'presets':STATE.get('fixturePresets',PRESETS)})
         if path == '/api/artnet':
-            return self.reply(MONITOR.snapshot())
+            snapshot=MONITOR.snapshot()
+            snapshot['controllerMode']=CONTROLLER.snapshot() if CONTROLLER else None
+            return self.reply(snapshot)
         if path == '/api/artnet/export':
-            return self.reply(MONITOR.snapshot(), extra={'Content-Disposition': 'attachment; filename="siteflow-artnet-capture.json"'})
+            capture=MONITOR.snapshot()
+            capture['controllerMode']=CONTROLLER.snapshot() if CONTROLLER else None
+            capture['captureLog']=(
+                {'logging':MONITOR.logger.status(),'records':MONITOR.logger.recent(50)}
+                if MONITOR.logger else None
+            )
+            return self.reply(capture, extra={'Content-Disposition': 'attachment; filename="siteflow-artnet-capture.json"'})
         if path == '/api/artnet/log':
             if not MONITOR.logger:
                 return self.reply({'error':'Capture log is not enabled'},409)
@@ -484,8 +502,7 @@ class Handler(BaseHTTPRequestHandler):
         return self.reply((ROOT / 'static' / filename).read_bytes(), content_type=mime)
 
     def do_POST(self):
-        origin = self.headers.get('Origin', '')
-        if not self.allowed_host() or origin not in ('http://127.0.0.1:' + str(PORT), 'http://localhost:' + str(PORT)):
+        if not self.allowed_origin():
             return self.reply({'error': 'Same-origin local requests only'}, 403)
         if self.headers.get('X-SiteFlow-Token') != TOKEN:
             return self.reply({'error': 'Invalid request token'}, 403)
@@ -497,6 +514,15 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(data, dict):
                 raise ValueError('Invalid request')
             path = urllib.parse.urlsplit(self.path).path
+            if path == '/api/artnet/mode':
+                if CONTROLLER is None:return self.reply({'error':'Controller mode service unavailable'},503)
+                try:result=CONTROLLER.switch(data.get('mode'))
+                except ValueError as exc:
+                    with LOCK:STATE['txMuted']=True;save()
+                    return self.reply({'error':str(exc),'controllerMode':CONTROLLER.snapshot()},409)
+                with LOCK:
+                    STATE['txMuted']=MONITOR.tx_muted;save()
+                return self.reply(result)
             if path == '/api/led/mapping':
                 with LOCK:
                     items=STATE.get('ledFixtures',[]);old=next((f for f in items if f['id']==data.get('id')),None)
@@ -517,12 +543,6 @@ class Handler(BaseHTTPRequestHandler):
                     if MONITOR.tx_muted:return self.reply({'error':'Blackout · resume TX first'},409)
                     LED.set_values(f,data.get('values'),data.get('enabled'))
                     return self.reply({'accepted':True})
-            if path == '/api/artnet/desk-passthrough':
-                enabled=data.get('enabled')
-                if type(enabled) is not bool:raise ValueError('Invalid mode')
-                with MONITOR.lock:MONITOR.desk_passthrough=enabled
-                with LOCK:STATE['deskPassthrough']=enabled;save()
-                return self.reply({'deskPassthrough':enabled})
             if path == '/api/input-controls':
                 with LOCK:
                     device_id=data.get('deviceId')
@@ -555,6 +575,17 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/artnet/blackout':
                 enabled=data.get('enabled')
                 if type(enabled) is not bool:raise ValueError('Invalid blackout state')
+                if CONTROLLER is not None:
+                    try:
+                        if enabled:CONTROLLER.stop()
+                        else:CONTROLLER.resume()
+                    except ValueError as exc:return self.reply({'error':str(exc)},409)
+                    result={'txMuted':MONITOR.tx_muted,'zeroSent':False,
+                            'message':'BLACKOUT · TX stopped without a zero frame' if MONITOR.tx_muted else 'BLACKOUT released'}
+                    MONITOR.blackout_status=result
+                    with LOCK:
+                        STATE['txMuted']=MONITOR.tx_muted;STATE['blackoutStatus']=result;save()
+                    return self.reply(result)
                 if enabled:
                     with LOCK:
                         device=next((d for d in STATE['devices'] if d['kind']=='artnet'),None)
@@ -625,22 +656,28 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    global PORT, STATE_FILE, HOST_IP
+    global PORT, STATE_FILE, HOST_IP, CONTROLLER
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--port', type=int, default=8765)
+    parser.add_argument('--bind', default='0.0.0.0',
+                        help='Web UI listen address (default: all local interfaces)')
     parser.add_argument('--state', type=Path, default=STATE_FILE)
     parser.add_argument('--host-ip', help='Local IPv4 address of the LAN adapter')
     parser.add_argument('--scan-on-start', action='store_true')
-    parser.add_argument('--refresh-seconds', type=int, default=60,
-                        help='Known-device read checks; 0 disables automatic refresh (default: 60)')
+    parser.add_argument('--refresh-seconds', type=int, default=0,
+                        help='Known-device full scan interval; 0 disables automatic scans (default: 0)')
     args = parser.parse_args()
     PORT, STATE_FILE = args.port, args.state
     HOST_IP = args.host_ip
     load()
     import_led_registry()
-    MONITOR.desk_passthrough=bool(STATE.get('deskPassthrough',False))
-    MONITOR.set_tx_muted(bool(STATE.get('txMuted',False)))
-    MONITOR.blackout_status=STATE.get('blackoutStatus',{})
+    MONITOR.set_tx_muted(True)
+    CONTROLLER=ControllerModes(MONITOR, STATE_FILE.parent/'controller-backups', stopped=bool(STATE.get('txMuted',False)))
+    MONITOR.tx_permission=CONTROLLER.tx_allowed
+    CONTROLLER.refresh()
+    MONITOR.blackout_status=({'txMuted':True,'zeroSent':False,
+                              'message':'BLACKOUT · TX stopped without a zero frame'}
+                             if MONITOR.tx_muted else {})
     MONITOR.logger=ArtNetLog(STATE_FILE.parent/'artnet-log')
     MONITOR.logger.start()
     try:
@@ -660,8 +697,8 @@ def main():
                 break
     else:
         print(MONITOR.error, flush=True)
-    server = ThreadingHTTPServer(('127.0.0.1', PORT), Handler)
-    print('SiteFlow Node → http://127.0.0.1:%s' % PORT, flush=True)
+    server = ThreadingHTTPServer((args.bind, PORT), Handler)
+    print('SiteFlow Node → http://127.0.0.1:%s · LAN http://%s:%s' % (PORT, MONITOR.host_ip, PORT), flush=True)
     if args.scan_on_start:
         start_scan('scan')
     if args.refresh_seconds:
@@ -683,6 +720,10 @@ def main():
                 known={f['id'] for f in fixtures}
                 for c in physical_controls:c['targetFixtures']=[fid for fid in c.get('targetFixtures',[]) if fid in known]
                 MONITOR.route_tick(ip,physical_controls,fixtures)
+                if MONITOR.tx_blocked():
+                    LED.status=dict(active=False,message='BLACKOUT · TX stopped')
+                    MONITOR.stop_event.wait(.04)
+                    continue
                 with LOCK:
                     leds=json.loads(json.dumps(STATE.get('ledFixtures',[])))
                     try:
@@ -702,6 +743,9 @@ def main():
                     except (ValueError,OSError) as exc:LED.status=dict(active=False,error=str(exc))
             MONITOR.stop_event.wait(.04)
     threading.Thread(target=routing_loop,daemon=True).start()
+    def controller_mode_loop():
+        while not MONITOR.stop_event.wait(30):CONTROLLER.refresh()
+    threading.Thread(target=controller_mode_loop,daemon=True).start()
     def artnet_status_loop():
         index=0
         while True:

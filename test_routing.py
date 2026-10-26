@@ -14,7 +14,7 @@ class RoutingTests(unittest.TestCase):
   c=dict(id='desk-spare-81',enabled=True,universe=1,start=81,targetFixtures=['jellyfish-1'])
   m.route_tick('192.168.18.80',c,fixtures)
   values=parse_packet(m.socket.sendto.call_args.args[0])['values']
-  self.assertEqual(values[0],17)
+  self.assertEqual(values[0],0)
   self.assertEqual(values[192:],[255,70,20,10,30,60])
   self.assertTrue(m.routing['active']);self.assertEqual(m.tool_tx['values'],values)
   m._fixture_baseline.side_effect=ValueError('Input stale')
@@ -43,11 +43,12 @@ class RoutingTests(unittest.TestCase):
   self.assertEqual(frame[195],149);self.assertEqual(frame[204],149)
   self.assertEqual(frame[192],0);self.assertEqual(frame[203],0)
 
- def test_unassigned_desk_channels_are_not_zeroed(self):
+ def test_direct_card_preserves_unassigned_fixture_channels(self):
   m=self.setup_monitor();base=[31]*192;base[80]=149;m._fixture_baseline=Mock(return_value=base)
   fixture=dict(id='p',name='Parlight',universe=1,start=1,channels=[{'function':name,'default':0} for name in ['Master','Red','Green','Blue','White','Amber','UV','Unknown','Unknown','Unknown','Unknown','Strobe']])
   c=dict(id='test',enabled=True,universe=1,start=81,targetFixtures=['p'],faderFunctions=['Red']+[None]*15)
-  m.route_tick('192.168.18.80',c,[fixture]);v=parse_packet(m.socket.sendto.call_args.args[0])['values']
+  direct=dict(id='direct',routingMode='direct',enabled=True,universe=1,start=1,count=16,targetFixtures=[])
+  m.route_tick('192.168.18.80',[direct,c],[fixture]);v=parse_packet(m.socket.sendto.call_args.args[0])['values']
   self.assertEqual(v[1],149);self.assertEqual(v[0],31);self.assertEqual(v[7],31);self.assertEqual(v[11],31)
  def test_blackout_stops_every_send_without_zero_frame(self):
   m=self.setup_monitor();fixtures=initial_patch('00:00:c8:d8:a2:71');c=dict(id='c',enabled=True,universe=1,start=81,targetFixtures=['jellyfish-1'])
@@ -89,8 +90,16 @@ class RoutingTests(unittest.TestCase):
   c=dict(id='test',enabled=True,universe=1,start=81,targetFixtures=['p'],faderFunctions=['Master']+[None]*15)
   m.route_tick('192.168.18.80',c,[fixture]);packet=parse_packet(m.socket.sendto.call_args.args[0])
   self.assertEqual(packet['universe'],0);self.assertEqual(packet['values'][0],255);self.assertEqual(m.routing['inputUniverse'],1)
- def test_desk_passthrough_skips_low_remap_but_preserves_high(self):
-  m=self.setup_monitor();base=[0]*192;base[0]=19;base[80]=123;m._fixture_baseline=Mock(return_value=base)
-  fixtures=[dict(id='low',name='Low',universe=1,start=1,channels=[dict(function='Master',default=0)]),dict(id='high',name='High',universe=1,start=193,channels=[dict(function='Master',default=0)])]
-  c=dict(id='test',enabled=True,universe=1,start=81,targetFixtures=['low','high'],faderFunctions=['Master']+[None]*15)
-  m.desk_passthrough=True;m.route_tick('192.168.18.80',c,fixtures);v=parse_packet(m.socket.sendto.call_args.args[0])['values'];self.assertEqual(v[0],19);self.assertEqual(v[192],123)
+ def test_mapped_bank_does_not_leak_its_source_range_to_output(self):
+  m=self.setup_monitor();base=[31]*192;base[80]=123;m._fixture_baseline=Mock(return_value=base)
+  fixture=dict(id='high',name='High',universe=1,start=193,channels=[dict(function='Master',default=0)])
+  c=dict(id='mapped',routingMode='mapped',enabled=True,universe=1,start=81,count=16,targetFixtures=['high'],faderFunctions=['Master']+[None]*15)
+  m.route_tick('192.168.18.80',c,[fixture]);v=parse_packet(m.socket.sendto.call_args.args[0])['values']
+  self.assertEqual(v[80:96],[0]*16);self.assertEqual(v[192],123)
+
+ def test_mapped_bank_without_targets_has_no_output_even_with_other_direct_cards(self):
+  m=self.setup_monitor();base=[0]*192;base[144]=211;m._fixture_baseline=Mock(return_value=base)
+  direct=dict(id='direct',routingMode='direct',enabled=True,universe=1,start=1,count=16,targetFixtures=[])
+  empty=dict(id='input10',routingMode='mapped',enabled=True,universe=1,start=145,count=16,targetFixtures=[],faderFunctions=['Master']+[None]*15)
+  m.route_tick('192.168.18.80',[direct,empty],[]);v=parse_packet(m.socket.sendto.call_args.args[0])['values']
+  self.assertEqual(v[144],0)

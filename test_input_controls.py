@@ -25,3 +25,13 @@ class InputControlTests(unittest.TestCase):
         self.assertEqual(next(r['channel'] for r in rules if r['fixtureId']=='j' and r['input']==8),6)
         self.assertEqual(next(r['channel'] for r in rules if r['fixtureId']=='p' and r['input']==8),8)
         self.assertFalse(any(r['fixtureId']=='j' and r['input'] in [6,7] for r in rules))
+
+    def test_direct_and_mapped_modes_are_explicit(self):
+        fixtures=initial_patch('00:00:c8:d8:a2:71');controls=initial_controls('00:00:c8:d8:a2:71')
+        direct=dict(controls[0],routingMode='direct',targetFixtures=[],faderFunctions=['Master']+[None]*15,directFixtureId='jellyfish-1')
+        saved=validate_control(direct,controls,fixtures)
+        self.assertEqual(saved['routingMode'],'direct');self.assertEqual(saved['rules'],[]);self.assertEqual(saved['directFixtureId'],'jellyfish-1')
+        mapped=dict(direct,routingMode='mapped',targetFixtures=['jellyfish-1'],directFixtureId=None)
+        saved=validate_control(mapped,controls,fixtures)
+        self.assertEqual(saved['routingMode'],'mapped');self.assertTrue(saved['rules'])
+        with self.assertRaises(ValueError):validate_control(dict(direct,routingMode='other'),controls,fixtures)

@@ -23,7 +23,7 @@ class ManualFaderTests(unittest.TestCase):
   m.set_tx_muted(True);self.assertFalse(m.manual_overrides)
   with self.assertRaises(ValueError):m.set_manual_fader('192.168.18.80',c,1,149)
   m.set_tx_muted(False);m.set_manual_fader('192.168.18.80',c,1,149)
-  next(iter(m.streams.values()))['_last']-=3
+  next(iter(m.streams.values()))['_last']-=16
   m.route_tick('192.168.18.80',c,initial_patch('00:00:c8:d8:a2:71'));self.assertFalse(m.manual_overrides)
 
  def test_standalone_manual_routes_and_first_input_reclaims(self):
@@ -40,7 +40,17 @@ class ManualFaderTests(unittest.TestCase):
   with self.assertRaises(ValueError):m.set_manual_fader('192.168.18.80',c,1,118,expected_offline=True)
 
  def test_offline_manual_zero_not_held_by_stale_direct_value(self):
-  m,c,raw=self.setup_m();raw[0]=200;m.ingest(packet(raw),('192.168.18.80',2048));next(iter(m.streams.values()))['_last']-=3
+  m,c,raw=self.setup_m();raw[0]=200;m.ingest(packet(raw),('192.168.18.80',2048));next(iter(m.streams.values()))['_last']-=16
   fixture=dict(id='p',name='Lamp',start=1,universe=1,channels=[dict(function='Master',default=255)])
   c['targetFixtures']=['p'];m.set_manual_fader('192.168.18.80',c,1,0,expected_offline=True)
   m.route_tick('192.168.18.80',c,[fixture]);self.assertEqual(parse_packet(m.socket.sendto.call_args.args[0])['values'][0],0)
+
+ def test_direct_mode_manual_fader_replaces_same_output_channel(self):
+  m,c,raw=self.setup_m();c.update(routingMode='direct',targetFixtures=[])
+  m.set_manual_fader('192.168.18.80',c,1,149,20)
+  m.route_tick('192.168.18.80',c,initial_patch('00:00:c8:d8:a2:71'))
+  frame=parse_packet(m.socket.sendto.call_args.args[0])['values']
+  self.assertEqual(frame[80],149);self.assertEqual(m.routing['status'],'Direct 1:1')
+  raw[80]=21;m.ingest(packet(raw),('192.168.18.80',2048));self.assertFalse(m.manual_overrides)
+  m.route_tick('192.168.18.80',c,initial_patch('00:00:c8:d8:a2:71'))
+  self.assertEqual(parse_packet(m.socket.sendto.call_args.args[0])['values'][80],21)
