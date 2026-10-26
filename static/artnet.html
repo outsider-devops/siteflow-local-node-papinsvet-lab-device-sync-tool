@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><title>Art-Net Signal Monitor · SiteFlow Node</title><link rel="stylesheet" href="/app.css"><script src="/artnet.js" defer></script><script src="/monitor-page.js" defer></script></head>
+<body>
+<header class="brand"><span class="brand-dot"></span><strong>.outsider</strong><span class="siteflow">SiteFlow</span><b>Node</b><span class="header-context">ART-NET SIGNAL MONITOR</span><span class="local-badge"><span></span>LOCAL ONLY</span></header>
+<main class="monitor-page">
+ <a href="/" class="back-to-devices">← Device Sync Tool</a>
+ <section class="title-row monitor-title"><div><div class="place-identity"><img class="place-logo" src="/Papinsvet-logo.png" alt="Папин свет"><span>@papinsvet Lab</span></div><h1>Art-Net Signal Monitor</h1><p class="subtitle" id="monitor-device">Connecting to the local node…</p></div><div class="monitor-page-actions"><button class="button" id="desk-pass" disabled>Desk 1–192</button><button class="primary" id="blackout-tx" disabled>Blackout · Zero & Stop TX</button><a class="button" id="input-controls-link" href="/input-controls">Input Controls</a><a class="button primary" id="dmx-fixtures" href="/fixtures">DMX Fixtures</a><a class="button" id="monitor-interface" hidden target="_blank" rel="noopener noreferrer">Open node interface</a><a class="button" href="/api/artnet/export">Export snapshot</a><a class="button" href="/api/artnet/log?limit=50" target="_blank" rel="noopener">Read capture log</a></div></section>
+ <section id="monitor-workspace" aria-label="Full Art-Net workspace"><div class="empty">Loading monitor…</div></section>
+ <section id="custom-led-devices"></section>
+ <footer><span>Local Art-Net monitor · mapped fixture test <span class="footer-sep">/</span><code id="monitor-host"></code></span><span>Physical OUT requires a separate feedback receiver.</span></footer>
+</main>
+<div id="toast" class="toast" role="status" hidden></div>
+</body></html>

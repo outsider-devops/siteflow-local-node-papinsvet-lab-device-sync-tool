@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><title>Input Controls · SiteFlow Node</title><link rel="stylesheet" href="/app.css"><script src="/input-controls.js" defer></script></head>
+<body>
+<header class="brand"><span class="brand-dot"></span><strong>.outsider</strong><span class="siteflow">SiteFlow</span><b>Node</b><span class="header-context">INPUT CONTROLS</span><span class="local-badge"><span></span>LOCAL ONLY</span></header>
+<main class="monitor-page">
+ <a id="back-monitor" href="/artnet" class="back-to-devices">← Art-Net Signal Monitor</a>
+ <section class="title-row"><div><div class="place-identity"><img class="place-logo" src="/Papinsvet-logo.png" alt="Папин свет"><span>@papinsvet Lab</span></div><h1>Input Controls</h1><p id="input-device" class="subtitle">Loading…</p></div><button class="primary" id="add-control" disabled>Add virtual input</button></section>
+ <p class="artnet-caution">Live input routing · Saved enabled rules send Art-Net to the selected fixtures. Source Universe 1 → Output Universe 0. Assigned functions replace destination values; no software HTP. Physical DMX is not measured.</p>
+ <p class="artnet-note">Drag a fader for temporary manual control (amber). Movement of its desk channel cancels that override immediately.</p><p id="free-inputs" class="artnet-note"></p>
+ <section id="control-editor" hidden></section>
+ <section id="control-cards" class="fixture-cards"></section>
+ <footer><span>Virtual input patch <span class="footer-sep">/</span><code>Inventory only</code></span><span>Universe and channel addresses are stored locally.</span></footer>
+</main>
+<div id="toast" class="toast" role="status" hidden></div>
+</body></html>

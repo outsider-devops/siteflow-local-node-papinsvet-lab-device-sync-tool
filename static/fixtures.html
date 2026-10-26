@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><title>DMX Fixtures · SiteFlow Node</title><link rel="stylesheet" href="/app.css"><script src="/fixtures.js" defer></script></head>
+<body>
+<header class="brand"><span class="brand-dot"></span><strong>.outsider</strong><span class="siteflow">SiteFlow</span><b>Node</b><span class="header-context">DMX FIXTURES</span><span class="local-badge"><span></span>LOCAL ONLY</span></header>
+<main class="monitor-page">
+ <a id="back-monitor" href="/artnet" class="back-to-devices">← Art-Net Signal Monitor</a>
+ <section class="title-row"><div><div class="place-identity"><img class="place-logo" src="/Papinsvet-logo.png" alt="Папин свет"><span>@papinsvet Lab</span></div><h1>DMX Fixtures</h1><p class="subtitle" id="fixture-device">Loading…</p></div><button class="primary" id="add-fixture">Add fixture</button></section>
+ <p class="artnet-note">Location patch · Inventory only. Saving does not send DMX or change fixture hardware addresses.</p>
+ <div class="fixture-toolbar"><label>Universe <select id="fixture-universe"><option value="all">All universes</option></select></label><span id="patch-summary"></span></div>
+ <p class="artnet-note">Desk: U1 / CH 1–192. Jellyfish profile: 11-channel mode; CH 6 Strobe; CH 7–11 functions unknown. Project values for CH 6–11: 0.</p>
+ <section class="fixture-test-panel"><button class="primary" id="test-fixtures" disabled>Test mapped fixtures</button><p>All supported fixtures in the output universe · White 1s → Red 1s → Off, one fixture at a time. Unknown profiles are skipped.</p><p class="artnet-note">Latest desk input is preserved on other channels. Without input, the last known frame (or zeros) is used. Other network controllers and physical DMX output are not measured.</p><div id="fixture-test-status" role="status">Not started</div></section>
+ <section id="fixture-editor" hidden></section>
+ <section id="fixture-cards" class="fixture-cards" aria-label="Location fixtures"></section>
+ <footer><span>Local DMX patch <span class="footer-sep">/</span><code>Inventory only</code></span><span>Universe and channel addresses are stored locally.</span></footer>
+</main>
+<div id="toast" class="toast" role="status" hidden></div>
+</body></html>

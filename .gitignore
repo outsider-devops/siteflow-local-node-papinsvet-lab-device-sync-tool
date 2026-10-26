@@ -1,0 +1,9 @@
+data/
+__pycache__/
+*.pyc
+.DS_Store
+._*
+__MACOSX/
+delivery-comparison*.json
+.test-tmp/
+test-results.txt
