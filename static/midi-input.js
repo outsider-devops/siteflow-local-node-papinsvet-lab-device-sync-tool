@@ -74,8 +74,8 @@
     $('#midi-target-picker').innerHTML='<option value="">Select fixture</option>'+fixtures.filter(f=>!section.targetFixtures.includes(f.id)).map(f=>`<option value="${esc(f.id)}">${esc(f.name)}${f.virtualWiz?' · WiZ':f.virtualLED?' · LED':''}</option>`).join('');
     $('#add-midi-target').disabled=true;
     $('#midi-target-list').innerHTML=section.targetFixtures.map(fid=>{
-      const fixture=fixtures.find(f=>f.id===fid),mode=section.targetModes[fid]||'original';
-      return `<div class="midi-target-row"><strong>${esc(fixture?.name||'Unavailable fixture')}</strong>${fixture?.id==='led:matrix'?`<select data-midi-target-mode="${esc(fid)}" ${editing?'':'disabled'} aria-label="LED Matrix control preset"><option value="parled" ${mode==='parled'?'selected':''}>PAR LED · Color intensity</option><option value="pixel-fill" ${mode!=='parled'?'selected':''}>Pixel Fill · Color height</option></select>`:''}${fixture?.mappingPreset==='beam230-16ch'?`<select data-midi-target-mode="${esc(fid)}" ${editing?'':'disabled'} aria-label="${esc(fixture.name)} control preset"><option value="original" ${mode!=='parled'?'selected':''}>Original</option><option value="parled" ${mode==='parled'?'selected':''}>ParLed Driver Emulation</option></select>`:''}<button data-remove-midi-target="${esc(fid)}" ${editing?'':'disabled'} aria-label="Remove ${esc(fixture?.name||'fixture')}">×</button></div>`;
+      const fixture=fixtures.find(f=>f.id===fid),mode=section.targetModes[fid]||'original';const sequenceMode=['once','loop'].includes(mode)?mode:fixture?.sequenceDefinition?.triggerMode==='loop'?'loop':'once';
+      return `<div class="midi-target-row"><strong>${esc(fixture?.name||'Unavailable fixture')}</strong>${fixture?.virtualSequence?`<label class="target-preset">Playback<select data-midi-target-mode="${esc(fid)}" ${editing?'':'disabled'} aria-label="${esc(fixture.name)} playback"><option value="once" ${sequenceMode==='once'?'selected':''}>Once</option><option value="loop" ${sequenceMode==='loop'?'selected':''}>Loop</option></select></label>`:''}${fixture?.id==='led:matrix'?`<select data-midi-target-mode="${esc(fid)}" ${editing?'':'disabled'} aria-label="LED Matrix control preset"><option value="parled" ${mode==='parled'?'selected':''}>PAR LED · Color intensity</option><option value="pixel-fill" ${mode!=='parled'&&mode!=='screen'?'selected':''}>Pixel Fill · Color height</option><option value="screen" ${mode==='screen'?'selected':''}>Screen · Pixel canvas</option></select>`:''}${fixture?.mappingPreset==='beam230-16ch'?`<select data-midi-target-mode="${esc(fid)}" ${editing?'':'disabled'} aria-label="${esc(fixture.name)} control preset"><option value="original" ${mode!=='parled'?'selected':''}>Original</option><option value="parled" ${mode==='parled'?'selected':''}>ParLed Driver Emulation</option></select>`:''}<button data-remove-midi-target="${esc(fid)}" ${editing?'':'disabled'} aria-label="Remove ${esc(fixture?.name||'fixture')}">×</button></div>`;
     }).join('')||'<p class="artnet-note">No target fixtures selected.</p>';
     $('#midi-target-list').querySelectorAll('[data-remove-midi-target]').forEach(b=>b.onclick=()=>{editing.targetFixtures=editing.targetFixtures.filter(id=>id!==b.dataset.removeMidiTarget);delete editing.targetModes[b.dataset.removeMidiTarget];render();});
     $('#midi-target-list').querySelectorAll('[data-midi-target-mode]').forEach(s=>s.onchange=()=>{editing.targetModes[s.dataset.midiTargetMode]=s.value;render();});
@@ -129,8 +129,26 @@
       paint();
     }catch(e){message(e.message);}finally{busy=false;}
   }
+  const surfaceMouseQueue=[];let sendingSurfaceMouse=false;
+  async function queueSurfaceMouse(data){
+    const last=surfaceMouseQueue.at(-1);
+    if(last&&last.kind===data.kind&&data.kind!=='press'&&key(last.control)===key(data.control))last.value=data.kind==='delta'?last.value+data.value:data.value;
+    else surfaceMouseQueue.push({control:data.control,kind:data.kind,value:data.value});
+    if(sendingSurfaceMouse)return;sendingSurfaceMouse=true;
+    try{
+      while(surfaceMouseQueue.length){
+        const event=surfaceMouseQueue.shift();
+        if(event.kind==='delta'&&Math.abs(event.value)>63){const rest=event.value-Math.sign(event.value)*63;surfaceMouseQueue.unshift({...event,value:rest});event.value-=rest;}
+        const response=await fetch('/api/midi-inputs/element',{method:'POST',headers:{'Content-Type':'application/json','X-SiteFlow-Token':csrf},body:JSON.stringify({deviceId,sourceId,...event})});
+        const data=await response.json();if(!response.ok)throw Error(data.error||'Mouse control failed');runtime=data.runtime;paint();
+        message(data.matchedSlots?'Mouse → '+data.matchedSlots+' mapped faders':'This MIDI element is not assigned to an enabled section.');
+      }
+    }catch(e){surfaceMouseQueue.length=0;message(e.message);}finally{sendingSurfaceMouse=false;}
+  }
   window.addEventListener('message',event=>{
-    if(event.origin!==location.origin||event.source!==$('#midi-input-surface').contentWindow||event.data?.type!=='siteflow-midi-selection')return;
+    if(event.origin!==location.origin||event.source!==$('#midi-input-surface').contentWindow)return;
+    if(event.data?.type==='siteflow-midi-mouse'){if(editing){message('Save or cancel editing to control fixtures from the surface.');return;}const b=bindings.find(b=>key(b)===key(event.data.control));if(b){showElement(b);queueSurfaceMouse({...event.data,control:identity(b)});}return;}
+    if(event.data?.type!=='siteflow-midi-selection')return;
     const touched=bindings.find(b=>key(b)===key(event.data.control));showElement(touched);
     if(!editing){message('Press Edit to assign a MIDI element to the selected fader.');return;}
     const binding=bindings.find(b=>key(b)===key(event.data.control));if(!binding){message('This element has no MIDI mapping. Load its template or use MIDI Learn first.');return;}

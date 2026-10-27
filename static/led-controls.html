@@ -1,10 +1,10 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><title>LED Controls · SiteFlow Node</title><link rel="stylesheet" href="/app.css"><script src="/led-controls.js" defer></script></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><title>LED Controls · SiteFlow Node</title><link rel="stylesheet" href="/app.css"><script src="/led-controls.js" defer></script><script src="/restart.js" defer></script></head>
 <body>
 <header class="brand"><span class="brand-dot"></span><strong>.outsider</strong><span class="siteflow">SiteFlow</span><b>Node</b><span class="header-context">LED CONTROLS</span><span class="local-badge"><span></span>LOCAL ONLY</span></header>
 <main class="monitor-page">
- <a href="/" class="back-to-devices">← Device Sync Tool</a><section class="title-row"><div><div class="place-identity"><img class="place-logo" src="/Papinsvet-logo.png" alt="Папин свет"><span>@papinsvet Lab</span></div><h1>LED Controls</h1><p id="led-controller" class="subtitle">Loading…</p></div><a class="button" href="/artnet?device=00%3A00%3Ac8%3Ad8%3Aa2%3A71">Art-Net Signal Monitor</a></section><p class="artnet-note">Virtual DMX → RGB pixels. White and Amber are RGB approximations; UV is unsupported. Values shown are Tool TX, not optical feedback. Imported brightness caps are retained.</p><div id="led-status" role="status"></div><section id="led-cards" class="fixture-cards"></section>
+ <a href="/" class="back-to-devices">← Device Sync Tool</a><section class="title-row"><div><div class="place-identity"><img class="place-logo" src="/Papinsvet-logo.png" alt="Папин свет"><span>@papinsvet Lab</span></div><h1>LED Controls</h1><p id="led-controller" class="subtitle">Loading…</p></div><a class="button" href="/artnet?device=00%3A00%3Ac8%3Ad8%3Aa2%3A71">Art-Net Signal Monitor</a></section><p class="artnet-note">Virtual DMX → RGB pixels. White and Amber are RGB approximations; UV is a visible violet approximation. Values shown are Tool TX, not optical feedback. Imported brightness caps are retained.</p><div id="led-status" role="status"></div><section id="led-cards" class="fixture-cards"></section>
  <footer><span>Local DMX patch <span class="footer-sep">/</span><code>Inventory only</code></span><span>Universe and channel addresses are stored locally.</span></footer>
 </main>
 <div id="toast" class="toast" role="status" hidden></div>

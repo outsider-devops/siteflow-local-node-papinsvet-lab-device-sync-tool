@@ -3,6 +3,35 @@ from unittest.mock import Mock
 from artnet_monitor import ArtNetMonitor,parse_packet
 from fixtures import initial_patch
 class RoutingTests(unittest.TestCase):
+ def test_desk_holds_for_ten_seconds_then_clears_without_disarming_fx(self):
+  m=ArtNetMonitor();m.running=True;m.socket=Mock()
+  raw=[0]*192;raw[80]=150
+  stream=dict(sourceIp='192.168.18.80',universe=0,values=raw,_last=time.monotonic()-9.8,_changed={81:time.monotonic()-9.8})
+  m.streams['desk']=stream
+  lamp=dict(id='lamp',name='Lamp',start=193,universe=1,channels=[dict(function='Red')])
+  fx=dict(id='fx',name='FX',start=289,universe=1,mappingPreset='fx-activate-effect-4ch',
+          channels=[dict(function='Activate'),dict(function='Effect'),dict(function='Unknown'),dict(function='Unknown')])
+  control=dict(id='desk',enabled=True,routingMode='mapped',universe=0,start=81,count=8,
+               targetFixtures=['lamp'],faderFunctions=['Red']+[None]*7)
+  m.route_tick('192.168.18.80',[control],[lamp,fx],1)
+  self.assertEqual(parse_packet(m.socket.sendto.call_args.args[0])['values'][192],150)
+  m.set_fx_activation('192.168.18.80',fx,True,1)
+  stream['_last']=time.monotonic()-10.1
+  m.route_tick('192.168.18.80',[control],[lamp,fx],1)
+  values=parse_packet(m.socket.sendto.call_args.args[0])['values']
+  self.assertEqual((values[192],values[288]),(0,128))
+  self.assertEqual(m.routing['status'],'Input stale · desk channels off')
+ def test_duplicate_mapped_channel_uses_htp(self):
+  m=self.setup_monitor();base=[0]*192;base[80]=80;base[96]=140;m._fixture_baseline=Mock(return_value=base)
+  fixture=dict(id='lamp',name='Lamp',start=193,universe=1,channels=[dict(function='Red')])
+  controls=[dict(id=cid,enabled=True,routingMode='mapped',universe=1,start=start,count=8,
+                 targetFixtures=['lamp'],faderFunctions=['Red']+[None]*7)
+            for cid,start in [('a',81),('b',97)]]
+  m.route_tick('192.168.18.80',controls,[fixture])
+  self.assertEqual(parse_packet(m.socket.sendto.call_args.args[0])['values'][192],140)
+  base[80]=170;m.route_tick('192.168.18.80',controls,[fixture])
+  self.assertEqual(parse_packet(m.socket.sendto.call_args.args[0])['values'][192],170)
+  self.assertTrue(m.routing['active'])
  def setup_monitor(self):
   m=ArtNetMonitor();m.running=True;m.socket=Mock()
   m.nodes['192.168.18.80']={'_last':time.monotonic(),'ports':[{'output':True,'outputUniverse':1}]}
@@ -103,6 +132,47 @@ class RoutingTests(unittest.TestCase):
   empty=dict(id='input10',routingMode='mapped',enabled=True,universe=1,start=145,count=16,targetFixtures=[],faderFunctions=['Master']+[None]*15)
   m.route_tick('192.168.18.80',[direct,empty],[]);v=parse_packet(m.socket.sendto.call_args.args[0])['values']
   self.assertEqual(v[144],0)
+
+ def test_missing_target_is_skipped_without_blocking_valid_routes(self):
+  m=self.setup_monitor();base=[0]*192;base[80]=177;m._fixture_baseline=Mock(return_value=base)
+  fixture=dict(id='lamp',name='Lamp',universe=1,start=193,channels=[dict(function='Red',default=0)])
+  c=dict(id='input',enabled=True,routingMode='mapped',universe=0,start=81,count=16,
+         targetFixtures=['led:matrix','lamp'],faderFunctions=['Red']+[None]*15)
+  m.route_tick('192.168.18.80',[c],[fixture],output_universe=1)
+  packet=parse_packet(m.socket.sendto.call_args.args[0])
+  self.assertEqual(packet['values'][192],177)
+  self.assertTrue(m.routing['active'])
+  self.assertIn('led:matrix',m.routing['status'])
+
+ def test_removing_fx_activation_releases_previously_owned_channels(self):
+  m=self.setup_monitor();baseline=[0]*512;m._fixture_baseline=Mock(return_value=baseline)
+  fixture=dict(id='fx',name='FX',universe=1,start=289,mappingPreset='fx-activate-effect-4ch',
+              channels=[dict(function='Activate'),dict(function='Effect'),dict(function='Unknown'),dict(function='Unknown')])
+  m.set_fx_activation('192.168.18.80',fixture,True,1)
+  m.route_tick('192.168.18.80',[],[fixture],1)
+  sent=parse_packet(m.socket.sendto.call_args.args[0])
+  self.assertEqual(sent['values'][288],128)
+  m.socket.sendto.reset_mock()
+  m.set_fx_activation('192.168.18.80',fixture,False,1)
+  m.route_tick('192.168.18.80',[],[fixture],1)
+  self.assertEqual(m.socket.sendto.call_count,1)
+  released=parse_packet(m.socket.sendto.call_args.args[0])
+  self.assertEqual(released['values'][288:290],[0,0])
+
+ def test_midi_sequence_trigger_is_edge_only_and_rearms_low(self):
+  m=self.setup_monitor();m._fixture_baseline=Mock(side_effect=ValueError('No desk'))
+  sequence=dict(id='sequence:test',name='FX Walk',universe=1,start=1,virtualSequence=True,
+               sequenceArmed=True,sequenceDefinition=dict(steps=['fx'],effectSeconds=1,intervalSeconds=1,triggerMode='oneshot'),
+               channels=[dict(function='FX Activate'),dict(function='Sequence Trigger')])
+  fx=dict(id='fx',name='FX',universe=1,start=289,mappingPreset='fx-activate-effect-4ch',channels=[dict(function='Activate'),dict(function='Effect'),dict(function='Unknown'),dict(function='Unknown')])
+  m.start_fx_sequence=Mock(return_value={'active':True})
+  values=[0,255]+[0]*14;changed=[0,1]+[0]*14
+  midi=dict(id='fx-midi',enabled=True,targetFixtures=['sequence:test'],faderFunctions=['FX Activate','Sequence Trigger']+[None]*14,values=values,changed=changed)
+  for _ in range(3):m.route_tick('192.168.18.80',[],[sequence,fx],1,midi_controls=[midi])
+  self.assertEqual(m.start_fx_sequence.call_count,1)
+  midi['values'][1]=0;midi['changed'][1]=2;m.route_tick('192.168.18.80',[],[sequence,fx],1,midi_controls=[midi])
+  midi['values'][1]=255;midi['changed'][1]=3;m.route_tick('192.168.18.80',[],[sequence,fx],1,midi_controls=[midi])
+  self.assertEqual(m.start_fx_sequence.call_count,2)
 
  def test_lamp_state_does_not_override_input_faders(self):
   fixture=dict(id='beam',name='Beam',universe=1,start=145,mappingPreset='beam230-16ch',channels=[dict(function='Unknown',default=0) for _ in range(16)])

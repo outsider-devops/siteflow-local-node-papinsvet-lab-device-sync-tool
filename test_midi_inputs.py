@@ -34,3 +34,28 @@ class MIDIInputTests(unittest.TestCase):
   self.assertFalse(self.runtime.snapshot()['sections'][self.section['id']]['active'][0])
  def test_slot_validation_rejects_missing_mapping(self):
   with self.assertRaises(ValueError):validate_section(self.section,[self.section],[],[self.fixture],'midi')
+ def test_mouse_relative_matches_physical_and_is_scoped(self):
+  self.runtime.mouse('node','midi',identity(self.binding),'delta',3)
+  self.assertEqual(self.runtime.snapshot()['sections'][self.section['id']]['values'][0],131)
+  self.runtime.ingest([dict(source='Traktor',bytes=[176,2,127])])
+  self.assertEqual(self.runtime.snapshot()['sections'][self.section['id']]['values'][0],130)
+  with self.assertRaises(ValueError):self.runtime.mouse('node','midi',identity(self.binding),'delta',1000)
+ def test_mouse_button_preserves_toggle_edges(self):
+  b=dict(self.binding,number=3,interpretation='Button / CC press-release',onValue=127,offValue=0)
+  section=dict(self.section,slots=[dict(binding=identity(b),buttonMode='toggle',step=1)]+[None]*15)
+  self.runtime.configure({'node':[section]},[dict(id='midi',midiControls=[b])])
+  for value in (1,1,0):self.runtime.mouse('node','midi',identity(b),'press',value)
+  self.assertEqual(self.runtime.snapshot()['sections'][section['id']]['values'][0],255)
+  self.runtime.mouse('node','midi',identity(b),'press',1)
+  self.assertEqual(self.runtime.snapshot()['sections'][section['id']]['values'][0],0)
+
+ def test_momentary_and_toggle_button_modes_differ(self):
+  b=dict(self.binding,number=4,interpretation='Button / CC press-release',onValue=127,offValue=0)
+  for mode,expected_after_release,expected_second_press in [('momentary',0,255),('toggle',255,0)]:
+   section=dict(self.section,id='button-'+mode,slots=[dict(binding=identity(b),buttonMode=mode,step=1)]+[None]*15)
+   runtime=MIDIInputs();runtime.configure({'node':[section]},[dict(id='midi',midiControls=[b])])
+   runtime.ingest([dict(source='Traktor',bytes=[176,4,127])])
+   runtime.ingest([dict(source='Traktor',bytes=[176,4,0])])
+   self.assertEqual(runtime.snapshot()['sections'][section['id']]['values'][0],expected_after_release)
+   runtime.ingest([dict(source='Traktor',bytes=[176,4,127])])
+   self.assertEqual(runtime.snapshot()['sections'][section['id']]['values'][0],expected_second_press)

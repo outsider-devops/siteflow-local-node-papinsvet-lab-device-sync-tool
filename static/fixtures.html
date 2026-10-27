@@ -1,11 +1,11 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><title>DMX Fixtures · SiteFlow Node</title><link rel="stylesheet" href="/app.css"><script src="/fixtures.js" defer></script></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><title>DMX Fixtures · SiteFlow Node</title><link rel="stylesheet" href="/app.css"><script src="/fixtures.js" defer></script><script src="/restart.js" defer></script></head>
 <body>
 <header class="brand"><span class="brand-dot"></span><strong>.outsider</strong><span class="siteflow">SiteFlow</span><b>Node</b><span class="header-context">DMX FIXTURES</span><span class="local-badge"><span></span>LOCAL ONLY</span></header>
 <main class="monitor-page">
  <a id="back-monitor" href="/artnet" class="back-to-devices">← Art-Net Signal Monitor</a>
- <section class="title-row"><div><div class="place-identity"><img class="place-logo" src="/Papinsvet-logo.png" alt="Папин свет"><span>@papinsvet Lab</span></div><h1>DMX Fixtures</h1><p class="subtitle" id="fixture-device">Loading…</p></div><button class="primary" id="add-fixture">Add fixture</button></section>
+ <section class="title-row"><div><div class="place-identity"><img class="place-logo" src="/Papinsvet-logo.png" alt="Папин свет"><span>@papinsvet Lab</span></div><h1>DMX Fixtures</h1><p class="subtitle" id="fixture-device">Loading…</p></div><div class="fixture-list-actions"><button id="import-fixtures">Import list</button><input id="fixture-import-file" type="file" accept="application/json,.json" hidden><button id="export-fixtures">Export list</button><button class="primary" id="add-fixture">Add fixture</button></div></section>
  <p class="artnet-note">Patch edits stay local. Beam controls send Art-Net only after you move a control or hold a command.</p>
  <div class="fixture-toolbar"><label>Universe <select id="fixture-universe"><option value="all">All universes</option></select></label><span id="patch-summary"></span></div>
  <p class="artnet-note" id="fixture-routing-note">Reading controller input and output Universes…</p>
@@ -14,4 +14,5 @@
  <footer><span>Local DMX patch <span class="footer-sep">/</span><code>Explicit Art-Net control</code></span><span>Universe and channel addresses are stored locally.</span></footer>
 </main>
 <div id="toast" class="toast" role="status" hidden></div>
+<dialog id="fixture-import-dialog" class="fixture-import-dialog" aria-labelledby="fixture-import-title"><div class="fixture-import-content"><div class="fixture-import-heading"><div><h2 id="fixture-import-title">Import DMX fixture list</h2><p id="fixture-import-summary" class="artnet-note"></p></div><button id="fixture-import-close" aria-label="Close import preview">Close</button></div><p id="fixture-import-warning" class="fixture-import-warning" role="status"></p><div class="fixture-import-table-wrap"><table class="fixture-import-table"><thead><tr><th>Fixture</th><th>Universe</th><th>DMX range</th><th>Result</th></tr></thead><tbody id="fixture-import-rows"></tbody></table></div><p class="artnet-note">Existing fixtures are never overwritten. Exact duplicates are skipped. Conflicting or invalid rows are not added.</p><div class="fixture-import-actions"><button id="fixture-import-cancel">Cancel</button><button class="primary" id="fixture-import-apply" disabled>Add safe entries</button></div></div></dialog>
 </body></html>

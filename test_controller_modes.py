@@ -18,6 +18,33 @@ def form(output=1, input_universe=0, **changes):
 
 
 class ModeTests(unittest.TestCase):
+    def test_short_verification_loss_preserves_static_controls(self):
+        self.manager.refresh();original=self.manager.request
+        self.monitor.manual_overrides['fader']=dict(value=77)
+        self.monitor.fx_activations['fx']=dict(effect=True)
+        self.manager.request=Mock(side_effect=OSError('temporary timeout'))
+        with patch('controller_modes.time.sleep'):
+            self.manager.refresh()
+        self.assertTrue(self.monitor.tx_muted)
+        self.assertEqual(self.monitor.manual_overrides['fader']['value'],77)
+        self.assertFalse(self.monitor.fx_activations['fx']['effect'])
+        self.manager.request=original;self.manager.refresh()
+        self.assertFalse(self.monitor.tx_muted)
+        self.assertIn('fx',self.monitor.fx_activations)
+
+    def test_long_verification_loss_discards_controls_before_resume(self):
+        self.manager.refresh();original=self.manager.request
+        self.monitor.manual_overrides['fader']=dict(value=77)
+        self.monitor.fx_activations['fx']=dict(effect=False)
+        self.manager.request=Mock(side_effect=OSError('offline'))
+        with patch('controller_modes.time.sleep'):
+            self.manager.refresh()
+        self.manager.verification_lost_at=time.monotonic()-11
+        self.manager.request=original;self.manager.refresh()
+        self.assertFalse(self.monitor.tx_muted)
+        self.assertFalse(self.monitor.manual_overrides)
+        self.assertFalse(self.monitor.fx_activations)
+
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
         self.monitor=ArtNetMonitor();self.monitor.running=True;self.monitor.socket=Mock()
@@ -66,9 +93,13 @@ class ModeTests(unittest.TestCase):
         self.manager.request=Mock(side_effect=OSError('offline'));self.manager.refresh()
         self.assertEqual(self.manager.snapshot()['connection'],'OFFLINE');self.assertTrue(self.monitor.tx_muted)
 
-    def test_stop_is_silent_and_remains_stopped_after_poll(self):
-        self.manager.refresh();self.manager.stop();self.manager.refresh()
-        self.assertTrue(self.monitor.tx_muted);self.monitor.socket.sendto.assert_not_called()
+    def test_stop_sends_verified_zero_frame_then_remains_stopped_after_poll(self):
+        self.manager.refresh();result=self.manager.stop();self.manager.refresh()
+        self.assertTrue(self.monitor.tx_muted)
+        self.assertTrue(result['zeroSent']);self.assertEqual(result['channels'],512)
+        self.monitor.socket.sendto.assert_called_once()
+        packet=self.monitor.socket.sendto.call_args.args[0]
+        self.assertEqual(packet[-512:],bytes(512))
         self.manager.resume();self.assertFalse(self.monitor.tx_muted)
 
     def test_wrong_identity_never_applies(self):

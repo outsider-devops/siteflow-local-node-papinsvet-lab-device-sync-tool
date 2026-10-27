@@ -232,8 +232,24 @@ async function update(){if(updatingMIDI)return;updatingMIDI=true;try{const r=awa
 async function saveControl(key){const c=learned.get(key);if(!c)return;const name=$(`[data-name="${CSS.escape(key)}"]`)?.value.trim();if(!name){$('#learn-state').textContent='Enter a control name';return;}try{const response=await fetch('/api/midi/controls',{method:'POST',headers:{'Content-Type':'application/json','X-SiteFlow-Token':csrf},body:JSON.stringify({deviceId,control:{name,type:c.type,channel:c.channel,number:c.number,min:c.min,max:c.max,source:c.source,interpretation:classify(c),events:c.count,surfaceControlId:c.surfaceControlId,surfaceControlName:c.surfaceControlName}})}),data=await response.json();if(!response.ok)throw Error(data.error||'Could not save MIDI control');saved.add(key);existingControls=data.controls||existingControls;$('#learn-state').textContent='MIDI identity saved';$('#learn-state').className='signal-badge waiting';setAssignmentControl(c);renderKnown();renderLearn();}catch(e){$('#learn-state').textContent=e.message;}}
 async function saveAssignment(){const c=learned.get(activeLearnKey)||existingControls.find(x=>controlKey(x)===activeLearnKey);if(!c)return;const identity={type:c.type,channel:c.channel,number:c.number,source:c.source};try{const response=await fetch('/api/midi/assignment',{method:'POST',headers:{'Content-Type':'application/json','X-SiteFlow-Token':csrf},body:JSON.stringify({deviceId,control:identity,functionRole:$('#midi-function').value,target:$('#midi-target').value,mappingName:$('#midi-mapping-name').value})}),data=await response.json();if(!response.ok)throw Error(data.error||'Could not save function assignment');existingControls=existingControls.map(x=>identityMatches(x,{...identity})?data.control:x);$('#midi-assignment-status').textContent=`Saved · ${data.control.functionRole} → ${data.control.target==='global'?'Global / transport':'Art-Net routing layer'}. MIDI output routing is not enabled yet.`;renderKnown();}catch(e){$('#midi-assignment-status').textContent=e.message;}}
 function svgPoint(e){const svg=$('#midi-surface'),point=svg.createSVGPoint();point.x=e.clientX;point.y=e.clientY;return point.matrixTransform(svg.getScreenCTM().inverse());}
+function matchingSurfaceBindings(id){return existingControls.filter(b=>matchesSurface(b,id)&&(b.templateLayer===bindingLayer||!b.templateLayer||b.templateLayer==='Common'));}
+function emitMouseControl(c,kind,value){
+  if(q.get('embed')!=='1'||window.parent===window)return;
+  const binding=matchingSurfaceBindings(c.id).find(b=>b.templateLayer===bindingLayer)||matchingSurfaceBindings(c.id)[0];
+  if(!binding)return;
+  window.parent.postMessage({type:'siteflow-midi-mouse',control:{source:binding.source,type:binding.type,channel:binding.channel,number:binding.number},kind,value},location.origin);
+}
+function emitMouseValue(c,previous){
+  const norm=surfaceValues.get(visualSurface(c).id)??.5;
+  const binding=matchingSurfaceBindings(c.id).find(b=>b.templateLayer===bindingLayer)||matchingSurfaceBindings(c.id)[0];
+  if(binding?.interpretation?.toLowerCase().includes('relative')){
+    mouseStart.remainder=(mouseStart.remainder||0)+(norm-previous)*127;
+    const delta=Math.max(-63,Math.min(63,Math.trunc(mouseStart.remainder)));mouseStart.remainder-=delta;
+    if(delta)emitMouseControl(c,'delta',delta);
+  }else emitMouseControl(c,'value',norm);
+}
 function mousePreview(c, e) {
-  const point = svgPoint(e), physical = visualSurface(c);
+  const point = svgPoint(e), physical = visualSurface(c),previous=surfaceValues.get(physical.id)??.5;
   if (c.action === 'press') return;
   if (c.type === 'fader') {
     setSurfaceValue(c, .5 + (c.y * .6 - point.y) / (c.travel * .6));
@@ -248,7 +264,9 @@ function mousePreview(c, e) {
     if (delta < -180) delta += 360;
     rotateSurface(c, (surfaceAngles.get(physical.id) || 0) + delta);
     mouseStart.pointerAngle = pointerAngle;
+    mouseStart.remainder=(mouseStart.remainder||0)+delta/5;const steps=Math.max(-63,Math.min(63,Math.trunc(mouseStart.remainder)));mouseStart.remainder-=steps;if(steps)emitMouseControl(c,'delta',steps);
   }
+  if(['fader','crossfader','knob'].includes(c.type))emitMouseValue(c,previous);
 }
 function bindMouseControls() {
   const svg = $('#midi-surface');
@@ -259,18 +277,18 @@ function bindMouseControls() {
     if (!c) return;
     if (selectedControl && physicalSurface(selectedControl).id === c.id) c = selectedControl;
     else chooseSurface(c.id);
-    const point = svgPoint(e), physical = visualSurface(c);
+    const point = svgPoint(e), physical = visualSurface(c),previous=surfaceValues.get(physical.id)??.5;
     mouseControl = { c, node };
     mouseStart = { point, value: surfaceValues.get(physical.id) ?? .5,
       pointerAngle: Math.atan2(point.y - c.y * .6, point.x - c.x * .6) * 180 / Math.PI };
     svg.setPointerCapture(e.pointerId);
-    if (c.action === 'press') pressSurface(c, true);
+    if (c.action === 'press'){pressSurface(c,true);emitMouseControl(c,'press',1);}
     else if (c.type === 'fader' || c.type === 'crossfader') mousePreview(c, e);
     e.preventDefault();
   });
   svg.addEventListener('pointermove', e => { if (mouseControl) mousePreview(mouseControl.c, e); });
   const end = e => {
-    if (mouseControl?.c.action === 'press') pressSurface(mouseControl.c, false);
+    if(mouseControl?.c.action==='press'){pressSurface(mouseControl.c,false);emitMouseControl(mouseControl.c,'press',0);}
     mouseControl = null; mouseStart = null;
     if (svg.hasPointerCapture?.(e.pointerId)) svg.releasePointerCapture(e.pointerId);
   };
@@ -280,7 +298,7 @@ function bindMouseControls() {
   $('#midi-binding-layer').onchange=e=>{bindingLayer=e.target.value;if(selectedControl)chooseSurface(selectedControl.id);};
   $('#import-midi-template').onclick=importTemplate;
   $('#front-cue-select').onclick=()=>chooseSurface('front-cue-mix');
-  $('#front-cue-range').oninput=e=>{chooseSurface('front-cue-mix');setSurfaceValue(SURFACE.find(c=>c.id==='front-cue-mix'),Number(e.target.value)/127);};
+  $('#front-cue-range').oninput=e=>{chooseSurface('front-cue-mix');setSurfaceValue(SURFACE.find(c=>c.id==='front-cue-mix'),Number(e.target.value)/127);emitMouseControl(SURFACE.find(c=>c.id==='front-cue-mix'),'value',Number(e.target.value)/127);};
 }
 async function init(){if(q.get('embed')==='1')document.body.classList.add('midi-embedded');renderSurface();bindMouseControls();$('#skin-toggle').onclick=()=>{surfaceSkin=surfaceSkin==='papinsvet'?'factory':'papinsvet';const isPap=surfaceSkin==='papinsvet';$('#skin-toggle').textContent=`${isPap?'Papinsvet':'Factory'} Skin`;$('#skin-toggle').setAttribute('aria-pressed',String(isPap));renderSurface();};$('#midi-surface').addEventListener('click',e=>{const node=e.target.closest('[data-surface-id]');if(node&&(!selectedControl||physicalSurface(selectedControl).id!==node.dataset.surfaceId))chooseSurface(node.dataset.surfaceId);});$('#midi-surface').addEventListener('keydown',e=>{if((e.key==='Enter'||e.key===' ')&&e.target.matches('[data-surface-id]')){e.preventDefault();chooseSurface(e.target.dataset.surfaceId);}});try{const sr=await fetch('/api/state'),s=await sr.json();csrf=s.csrf;const d=s.devices.find(x=>x.id===deviceId&&(x.kind==='midi'||x.deviceClass==='midi'));if(!d)throw Error('MIDI device is not in the local inventory');$('#back').href='/';existingControls=d.midiControls||[];removedControls=d.midiRemovedControls||[];midiTemplate=d.midiTemplate||null;midiRevision=d.midiRevision??0;renderKnown();renderTemplateStatus();setAssignmentControl(null);}catch(e){$('#midi-status').textContent='Unavailable';$('#midi-status').className='signal-badge offline';$('#midi-port-status').textContent=e.message;return;}await update();timer=setInterval(()=>{if(!document.hidden)update();},100);}
 $('#midi-source').onchange=e=>{sourceFilter=e.target.value;if(learning){learned.clear();discardedCandidates.clear();learnStartedAt=Date.now()/1000;$('#learn-state').textContent='Capture restarted for selected input';}render();};$('#clear-midi').onclick=()=>{events=[];receivedMIDIMessages=0;render();};$('#learn-start').onclick=()=>{if(!sourceFilter){$('#learn-state').textContent='Select the Traktor input first';return;}if(!selectedControl){$('#learn-state').textContent='Select a control on the diagram first';return;}if(selectedControl.reserved){$('#learn-state').textContent='This control is reserved for controller mode switching';return;}learned.clear();discardedCandidates.clear();activeLearnKey=null;captureTarget={...selectedControl};learning=true;learnStartedAt=Date.now()/1000;$('#learn-start').disabled=true;$('#learn-stop').disabled=false;$('#midi-control-action').disabled=true;$('#midi-binding-layer').disabled=true;$('#import-midi-template').disabled=true;$('#learn-state').textContent=`Capturing · ${captureTarget.label}`;$('#learn-state').className='signal-badge online';$('#midi-selected-control').textContent=`Learning: ${captureTarget.label} · move only this control`;$('#midi-current-message').innerHTML=`<span>Listening for ${esc(captureTarget.label)}</span><strong>Move only this control now</strong><small>Capture starts when MIDI changes</small>`;renderLearn();};$('#learn-stop').onclick=()=>{learning=false;$('#learn-start').disabled=false;$('#learn-stop').disabled=true;$('#midi-control-action').disabled=false;$('#midi-binding-layer').disabled=false;$('#import-midi-template').disabled=false;$('#learn-state').textContent=`Stopped · ${learned.size} messages`;$('#learn-state').className='signal-badge waiting';renderLearn();};$('#learn-results').addEventListener('click',e=>{

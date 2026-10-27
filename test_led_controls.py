@@ -3,6 +3,15 @@ from unittest.mock import Mock
 from led_controls import defaults,controller_frames,LEDRuntime,virtual_fixture,validate_mapping
 from artnet_monitor import ArtNetMonitor,parse_packet
 class LEDTests(unittest.TestCase):
+ def test_strobe_255_is_steady_in_parled_and_pixel_modes(self):
+  from led_controls import pixel_payload
+  strip=defaults()[0]
+  matrix=defaults()[-1]
+  steady=[255,255,0,0,0,0,0,255]
+  for fixture in (strip,matrix):
+   self.assertEqual(pixel_payload(fixture,steady,.01),pixel_payload(fixture,steady,.06))
+   pulsing=steady[:-1]+[254]
+   self.assertNotEqual(pixel_payload(fixture,pulsing,.01),pixel_payload(fixture,pulsing,.06))
  def test_strips_order_capacity_and_complete_span(self):
   f=defaults()[0];frames=controller_frames([f],{f['id']:[255,255,0,0,0,0,0,0]},0)
   self.assertEqual(len(frames),8)

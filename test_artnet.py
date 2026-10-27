@@ -12,6 +12,45 @@ def dmx(universe=0, values=b'\x00\xff', sequence=1, physical=0):
 
 
 class ArtNetTests(unittest.TestCase):
+    def test_fx_activation_owns_only_its_two_mapped_channels(self):
+        class Socket:
+            def __init__(self):self.sent=[]
+            def sendto(self,packet,target):self.sent.append(parse_packet(packet))
+        fixture=dict(id='fx1',name='FX 1',mappingPreset='fx-activate-effect-4ch',universe=1,start=289,
+                     channels=[dict(function='Activate'),dict(function='Effect'),dict(function='Aux'),dict(function='Unknown')])
+        control=dict(id='aux',enabled=True,routingMode='mapped',universe=0,start=81,count=8,
+                     targetFixtures=['fx1'],faderFunctions=['Aux']+[None]*7)
+        m=ArtNetMonitor();m.running=True;m.socket=Socket()
+        raw=[0]*192;raw[80]=77;m._fixture_baseline=lambda ip,universe:raw
+        m.set_fx_activation('192.168.18.80',fixture,True,1)
+        m.route_tick('192.168.18.80',[control],[fixture],1)
+        values=m.socket.sent[-1]['values']
+        self.assertEqual(values[288:292],[128,0,77,0])
+        self.assertNotIn(291,m.route_owned)
+
+    def test_fx_fixture_local_channels_use_absolute_dmx_slots(self):
+        class Socket:
+            def __init__(self):self.sent=[]
+            def sendto(self,packet,target):self.sent.append((parse_packet(packet),target))
+        fixture=dict(id='fx1',name='FX 1',mappingPreset='fx-activate-effect-4ch',universe=1,start=289,
+                     channels=[dict(function='Activate · 102–153'),dict(function='Effect · 0/255'),
+                               dict(function='Unknown'),dict(function='Unknown')])
+        control=dict(id='desk1',enabled=True,routingMode='direct',universe=0,start=1,count=2,targetFixtures=[])
+        m=ArtNetMonitor();m.running=True;m.socket=Socket();m.tx_permission=lambda:True
+        m._fixture_baseline=lambda ip,universe:[7,0]+[0]*190
+        m.set_fx_activation('192.168.18.80',fixture,True,1)
+        m.route_tick('192.168.18.80',[control],[fixture],1)
+        sent=m.socket.sent[-1][0]
+        self.assertEqual((sent['universe'],sent['values'][0],sent['values'][288],sent['values'][289]),(1,7,128,0))
+        self.assertEqual(len(sent['values']),290,'FX 1 alone must not extend the frame into its unknown CH3–4')
+        m.fx_activations['fx1']['effect']=True
+        m.route_tick('192.168.18.80',[control],[fixture],1)
+        self.assertEqual(m.socket.sent[-1][0]['values'][289],255)
+        m.subnet='10.0.0.0/24'
+        packet_count=len(m.socket.sent)
+        m.route_tick('192.168.18.80',[control],[fixture],1)
+        self.assertEqual(len(m.socket.sent),packet_count,'routing errors must not send a full zero frame')
+
     def test_universe_byte_order_and_physical_are_separate(self):
         p=parse_packet(dmx(0x1234,physical=7))
         self.assertEqual((p['universe'],p['net'],p['subnet'],p['universeNibble'],p['physical']),(4660,18,3,4,7))

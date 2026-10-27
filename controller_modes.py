@@ -17,6 +17,7 @@ REBOOT_READBACK_TIMEOUT = 30
 SOFTWARE_INPUT_UNIVERSE = 0
 SOFTWARE_OUTPUT_UNIVERSE = 1
 BYPASS_UNIVERSE = 1
+TRANSIENT_HOLD_SECONDS = 10
 
 
 class DMXForm(HTMLParser):
@@ -85,6 +86,7 @@ class ControllerModes:
         self.operation = threading.Lock()
         self.user_stopped = stopped
         self.checked = 0
+        self.verification_lost_at = None
         self.busy = False
         self.state = dict(mode='UNKNOWN', connection='UNKNOWN', error=None, ports=[], autonomy='NOT VERIFIED')
 
@@ -121,7 +123,12 @@ class ControllerModes:
                     fresh=time.monotonic()-self.checked < VERIFY_TTL)
 
     def _accept(self, config):
-        self.checked = time.monotonic()
+        checked_at=time.monotonic()
+        expired=(self.verification_lost_at is not None and checked_at-self.verification_lost_at>=TRANSIENT_HOLD_SECONDS)
+        expired=expired or bool(self.checked and checked_at-self.checked>=VERIFY_TTL)
+        if expired:self.monitor.set_tx_muted(True)
+        self.checked = checked_at
+        self.verification_lost_at = None
         self.state = dict(mode=config['mode'], ports=config['ports'],inputPort=config.get('inputPort'),
                           outputPort=config.get('outputPort'),inputUniverse=config.get('inputUniverse'),
                           outputUniverse=config.get('outputUniverse'),connection='ONLINE', phase='READY', error=None,
@@ -129,9 +136,13 @@ class ControllerModes:
         if config.get('inputUniverse') is not None:self.monitor.input_universe=config['inputUniverse']
         self.monitor.set_tx_muted(config['mode'] != SOFTWARE or self.user_stopped)
 
-    def _fail(self, exc, stop_until_manual=False):
+    def _fail(self, exc, stop_until_manual=False, transient=False):
         if stop_until_manual:self.user_stopped = True
-        self.monitor.set_tx_muted(True)
+        preserve=(transient and not self.user_stopped and
+                  (self.state.get('mode')==SOFTWARE or self.verification_lost_at is not None))
+        if preserve and self.verification_lost_at is None:self.verification_lost_at=time.monotonic()
+        preserve=preserve and time.monotonic()-self.verification_lost_at<TRANSIENT_HOLD_SECONDS
+        self.monitor.set_tx_muted(True,preserve_runtime=preserve)
         self.checked = 0
         self.state = dict(self.state, mode='UNKNOWN', connection='OFFLINE' if isinstance(exc, OSError) else 'UNKNOWN', error=str(exc))
         self.state['phase'] = 'FAILED'
@@ -145,7 +156,7 @@ class ControllerModes:
                 # from making the controller badge flicker.
                 time.sleep(.2)
                 self._accept(self.read())
-        except (OSError, ValueError, http.client.HTTPException) as exc:self._fail(exc)
+        except (OSError, ValueError, http.client.HTTPException) as exc:self._fail(exc,transient=True)
         finally:self.operation.release()
         return self.snapshot()
 
@@ -209,8 +220,13 @@ class ControllerModes:
             self.operation.release()
 
     def stop(self):
+        if self.tx_allowed() and not self.monitor.tx_muted:
+            result=self.monitor.blackout(IP,output_universe=self.state.get('outputUniverse'))
+        else:
+            self.monitor.set_tx_muted(True)
+            result=dict(txMuted=True,zeroSent=False)
         self.user_stopped = True
-        self.monitor.set_tx_muted(True)
+        return result
 
     def resume(self):
         with self.operation:

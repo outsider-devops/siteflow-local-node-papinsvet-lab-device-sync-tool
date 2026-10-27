@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """SiteFlow local inventory, Art-Net input routing, and explicitly operated fixture controls."""
-from fixtures import initial_patch, validate_fixture, PRESETS, prepare_fixture_update, ensure_beam230_patch
+from fixtures import initial_patch, validate_fixture, PRESETS, prepare_fixture_update, prepare_fixture_import, ensure_beam230_patch, ensure_fx_profile
 from input_controls import initial_controls, validate_control, FADER_FUNCTIONS
 from led_controls import defaults as led_defaults,virtual_fixture,validate_mapping,controller_frames,LEDRuntime
 import argparse
@@ -8,6 +8,7 @@ import concurrent.futures
 import copy
 import datetime as dt
 import http.client
+import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import ipaddress
 import json
@@ -18,12 +19,13 @@ import secrets
 import shutil
 import socket
 import subprocess
+import sys
 import threading
 import time
 import urllib.parse
 import webbrowser
 import xml.etree.ElementTree as ET
-from artnet_monitor import ArtNetMonitor
+from artnet_monitor import ArtNetMonitor, DESK_HOLD_SECONDS
 from artnet_log import ArtNetLog
 from controller_modes import ControllerModes
 from local_devices import discover_local_devices
@@ -31,6 +33,7 @@ from midi_monitor import snapshot as midi_snapshot, wait_events as wait_midi_eve
 from midi_controls import remove_control as remove_midi_control, restore_control as restore_midi_control
 from traktor_template import load_template as load_traktor_template, merge_template as merge_traktor_template
 from midi_inputs import MIDIInputs, validate_section as validate_midi_section
+from sequence_profiles import make_virtual_fixtures as sequence_virtual_fixtures, validate_sequence, validate_sample
 
 ROOT = Path(__file__).resolve().parent
 LOCK = threading.RLock()
@@ -44,6 +47,8 @@ LED = LEDRuntime()
 CONTROLLER = None
 MIDI_INPUTS = MIDIInputs()
 MIDI_CONFIG_KEY = None
+HTTP_SERVER = None
+RESTART_REQUESTED = False
 
 
 def refresh_midi_inputs():
@@ -61,7 +66,8 @@ def refresh_midi_inputs():
 def midi_patch(device_id):
     io=controller_io()
     fixtures=effective_fixtures(STATE.get('fixtureMaps',{}).get(device_id,initial_patch(device_id)),io)
-    fixtures+=led_virtuals()+wiz_virtual_fixtures(STATE.get('devices',[]),io['outputUniverse'] if io else 1)
+    fixtures+=led_virtuals(io['outputUniverse'] if io else 1)+wiz_virtual_fixtures(STATE.get('devices',[]),io['outputUniverse'] if io else 1)
+    fixtures+=sequence_virtual_fixtures(STATE.get('sequences',{}).get(device_id,[]),io['outputUniverse'] if io else 1)
     return fixtures
 
 
@@ -80,6 +86,7 @@ def import_led_registry():
     for f in STATE['ledFixtures']:
         if f['id']=='led:matrix':
             f.setdefault('renderMode','pixel-fill');f.setdefault('reverse',False)
+            f.setdefault('matrixLayout',dict(pixelsPerRow=100,rows=2,serpentine=True,axis='vertical'))
     for ip,name in [('192.168.18.3','LED Strips · P1–P4'),('192.168.18.157','Vertical LED Matrix')]:
         d=next((d for d in STATE['devices'] if d['ip']==ip),None)
         if not d:
@@ -94,7 +101,7 @@ def import_led_registry():
             d['tracked'] = False
     save()
 
-def led_virtuals():return [virtual_fixture(f) for f in STATE.get('ledFixtures',[])]
+def led_virtuals(universe=1):return [virtual_fixture(f,universe) for f in STATE.get('ledFixtures',[])]
 
 def controller_io():
     """Return the verified physical input/output patch without changing hardware."""
@@ -673,6 +680,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not any(d['id']==device_id and d['kind']=='artnet' for d in STATE['devices']):return self.reply({'error':'Art-Net device not found'},404)
                 io=controller_io();items=STATE.get('inputControls',{}).get(device_id,initial_controls(device_id))
                 wiz_targets=wiz_virtual_fixtures(STATE.get('devices',[]),io['outputUniverse'] if io else 1)
+                wiz_targets+=sequence_virtual_fixtures(STATE.get('sequences',{}).get(device_id,[]),io['outputUniverse'] if io else 1)
                 return self.reply({'controls':effective_controls(items,io),'transmissionEnabled':True,
                                    'inputUniverse':io['inputUniverse'] if io else None,
                                    'outputUniverse':io['outputUniverse'] if io else None,
@@ -685,9 +693,27 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply({'fixtures':items,'presets':STATE.get('fixturePresets',PRESETS),
                                    'inputUniverse':io['inputUniverse'] if io else None,
                                    'outputUniverse':io['outputUniverse'] if io else None,
+                                   'fxActivations':copy.deepcopy(MONITOR.fx_activations),
+                                   'fxSequence':copy.deepcopy(MONITOR.fx_sequence),
                                    'fixtureControls':{k:copy.deepcopy(v) for k,v in MONITOR.fixture_controls.items()
                                        if (v.get('manualUntil') or 0)>time.monotonic() or (v.get('actionDeadline') or 0)>time.monotonic()},
                                    'beamLampStates':copy.deepcopy(STATE.get('beamLampStates',{}))})
+        if path == '/api/sequences':
+            device_id=urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get('device',[''])[0]
+            with LOCK:
+                if not any(d['id']==device_id and d.get('kind')=='artnet' for d in STATE['devices']):return self.reply({'error':'Art-Net device not found'},404)
+                io=controller_io();fixtures=effective_fixtures(STATE.get('fixtureMaps',{}).get(device_id,initial_patch(device_id)),io)
+                fx=sorted((f for f in fixtures if f.get('mappingPreset')=='fx-activate-effect-4ch'),key=lambda f:f['start'])
+                sequences=STATE.setdefault('sequences',{}).setdefault(device_id,[])
+                samples=STATE.setdefault('sequenceSamples',{}).setdefault(device_id,[])
+                if not samples and fx:
+                    sample=dict(id='sample-fx-walk',name='FX Walk',kind='fx-walk',steps=[f['id'] for f in fx],effectSeconds=1.0,intervalSeconds=1.0)
+                    samples.append(sample)
+                    if not sequences:sequences.append(dict(sample,id='sequence-fx-walk',armed=False))
+                    save()
+                return self.reply({'sequences':copy.deepcopy(sequences),'samples':copy.deepcopy(samples),
+                                   'fixtures':fx,'outputUniverse':io['outputUniverse'] if io else None,
+                                   'fxActivations':copy.deepcopy(MONITOR.fx_activations),'fxSequence':copy.deepcopy(MONITOR.fx_sequence)})
         if path == '/api/artnet':
             snapshot=MONITOR.snapshot()
             snapshot['controllerMode']=CONTROLLER.snapshot() if CONTROLLER else None
@@ -753,6 +779,8 @@ class Handler(BaseHTTPRequestHandler):
                  '/traktor-icon.svg': ('traktor-icon.svg','image/svg+xml'),
                  '/fixtures': ('fixtures.html','text/html; charset=utf-8'),
                  '/fixtures.js': ('fixtures.js','text/javascript; charset=utf-8'),
+                 '/sequences': ('sequences.html','text/html; charset=utf-8'),
+                 '/sequences.js': ('sequences.js','text/javascript; charset=utf-8'),
                  '/fixture': ('fixture.html','text/html; charset=utf-8'),
                  '/fixture.js': ('fixture.js','text/javascript; charset=utf-8'),
                  '/wiz': ('wiz.html','text/html; charset=utf-8'),
@@ -767,6 +795,7 @@ class Handler(BaseHTTPRequestHandler):
                  '/artnet': ('artnet.html', 'text/html; charset=utf-8'),
                  '/monitor-page.js': ('monitor-page.js', 'text/javascript; charset=utf-8'),
                  '/app.css': ('app.css', 'text/css; charset=utf-8'),
+                 '/restart.js': ('restart.js', 'text/javascript; charset=utf-8'),
                  '/app.js': ('app.js', 'text/javascript; charset=utf-8'),
                  '/artnet.js': ('artnet.js', 'text/javascript; charset=utf-8')}
         if path not in files:
@@ -775,18 +804,31 @@ class Handler(BaseHTTPRequestHandler):
         return self.reply((ROOT / 'static' / filename).read_bytes(), content_type=mime)
 
     def do_POST(self):
+        global RESTART_REQUESTED
         if not self.allowed_origin():
             return self.reply({'error': 'Same-origin local requests only'}, 403)
         if self.headers.get('X-SiteFlow-Token') != TOKEN:
             return self.reply({'error': 'Invalid request token'}, 403)
         try:
             length = int(self.headers.get('Content-Length', '0'))
-            if length > (131072 if urllib.parse.urlsplit(self.path).path in ('/api/fixtures','/api/input-controls','/api/midi-inputs/section') else 8192) or length < 0:
+            if length > (262144 if urllib.parse.urlsplit(self.path).path in ('/api/fixtures','/api/fixtures/import','/api/input-controls','/api/midi-inputs/section') else 8192) or length < 0:
                 return self.reply({'error': 'Request too large'}, 413)
             data = json.loads(self.rfile.read(length) or b'{}')
             if not isinstance(data, dict):
                 raise ValueError('Invalid request')
             path = urllib.parse.urlsplit(self.path).path
+            if path == '/api/restart':
+                if RESTART_REQUESTED:return self.reply({'error':'Restart is already in progress'},409)
+                # Stop our own output first. This does not persist BLACKOUT;
+                # startup re-verifies the controller before allowing TX.
+                if CONTROLLER is not None:CONTROLLER.stop()
+                else:MONITOR.set_tx_muted(True)
+                MONITOR.wake_routing()
+                RESTART_REQUESTED=True
+                self.reply({'accepted':True,'message':'Art-Net TX paused; restarting SiteFlow Node.'},202)
+                if HTTP_SERVER is not None:
+                    threading.Timer(.35,HTTP_SERVER.shutdown).start()
+                return
             if path == '/api/wiz/control':
                 device_id=data.get('deviceId')
                 with LOCK: device=next((dict(d) for d in STATE['devices'] if d['id']==device_id and d.get('kind')=='wiz'),None)
@@ -946,6 +988,15 @@ class Handler(BaseHTTPRequestHandler):
                     banks[controller_id]=sections;STATE['midiInputRevision']=STATE.get('midiInputRevision',0)+1;save()
                 refresh_midi_inputs();MONITOR.wake_routing()
                 return self.reply({'section':section,'sections':[s for s in sections if s['sourceId']==source_id]})
+            if path == '/api/midi-inputs/element':
+                controller_id=data.get('deviceId');source_id=data.get('sourceId')
+                with LOCK:
+                    if not any(d['id']==controller_id and d.get('kind')=='artnet' for d in STATE['devices']):return self.reply({'error':'Art-Net device not found'},404)
+                if not isinstance(data.get('control'),dict):raise ValueError('Select a MIDI element')
+                refresh_midi_inputs()
+                matched=MIDI_INPUTS.mouse(controller_id,source_id,data['control'],data.get('kind'),data.get('value'))
+                MONITOR.wake_routing()
+                return self.reply({'accepted':True,'matchedSlots':matched,'runtime':MIDI_INPUTS.snapshot(source_id)})
             if path == '/api/midi-inputs/fader':
                 with LOCK:
                     section=next((s for s in STATE.get('midiInputSections',{}).get(data.get('deviceId'),[]) if s['id']==data.get('sectionId') and s['sourceId']==data.get('sourceId')),None)
@@ -964,8 +1015,9 @@ class Handler(BaseHTTPRequestHandler):
                     fixtures=copy.deepcopy(STATE.get('fixtureMaps',{}).get(device_id,initial_patch(device_id)))
                     if io:
                         for item in fixtures:item['universe']=io['outputUniverse']
-                    fixtures+=led_virtuals()
+                    fixtures+=led_virtuals(io['outputUniverse'] if io else 1)
                     fixtures+=wiz_virtual_fixtures(STATE.get('devices',[]),io['outputUniverse'] if io else 1)
+                    fixtures+=sequence_virtual_fixtures(STATE.get('sequences',{}).get(device_id,[]),io['outputUniverse'] if io else 1)
                     control=validate_control(data.get('control'),items,fixtures)
                     maps[device_id]=[control if c['id']==control['id'] else c for c in items] if any(c['id']==control['id'] for c in items) else items+[control]
                     save()
@@ -982,12 +1034,39 @@ class Handler(BaseHTTPRequestHandler):
                     io=controller_io()
                     maps,presets,controls,affected=prepare_fixture_update(
                         STATE,device_id,data.get('fixture'),
-                        io['inputUniverse'] if io else None,io['outputUniverse'] if io else None)
+                        io['inputUniverse'] if io else None,io['outputUniverse'] if io else None,
+                        wiz_virtual_fixtures(STATE.get('devices',[]),io['outputUniverse'] if io else 1))
                     STATE.update(fixtureMaps=maps,fixturePresets=presets,inputControls=controls)
                     save()
                     MONITOR.wake_routing()
                     io=controller_io();items=effective_fixtures(maps[device_id],io)
                     return self.reply({'fixtures':items,'presets':presets,'affectedFixtures':affected,
+                                       'inputUniverse':io['inputUniverse'] if io else None,
+                                       'outputUniverse':io['outputUniverse'] if io else None})
+            if path == '/api/fixtures/import':
+                device_id=data.get('deviceId')
+                with LOCK:
+                    if not any(d['id']==device_id and d['kind']=='artnet' for d in STATE['devices']):return self.reply({'error':'Art-Net device not found'},404)
+                    io=controller_io();plan=prepare_fixture_import(
+                        STATE,device_id,data.get('fixtures'),
+                        io['inputUniverse'] if io else None,io['outputUniverse'] if io else None,
+                        wiz_virtual_fixtures(STATE.get('devices',[]),io['outputUniverse'] if io else 1))
+                    patch_snapshot=STATE.get('fixtureMaps',{}).get(device_id,initial_patch(device_id))
+                    fingerprint=hashlib.sha256(json.dumps(patch_snapshot,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+                    applied=False
+                    if data.get('action')=='apply':
+                        if data.get('confirm') is not True:return self.reply({'error':'Import confirmation required'},400)
+                        if data.get('expectedFingerprint')!=fingerprint or data.get('expectedOutputUniverse')!=(io['outputUniverse'] if io else None):
+                            return self.reply({'error':'The patch or controller output changed after preview. Review the refreshed import preview.'},409)
+                        maps,presets,controls=plan['state']
+                        if maps is not None:
+                            STATE.update(fixtureMaps=maps,fixturePresets=presets,inputControls=controls)
+                            save();MONITOR.wake_routing();applied=True
+                    elif data.get('action')!='preview':return self.reply({'error':'Choose preview or apply'},400)
+                    return self.reply({'rows':plan['rows'],'ready':plan['ready'],'existing':plan['existing'],
+                                       'blocked':plan['blocked'],'applied':applied,
+                                       'patchFingerprint':fingerprint,
+                                       'fixtures':effective_fixtures(STATE.get('fixtureMaps',{}).get(device_id,initial_patch(device_id)),io),
                                        'inputUniverse':io['inputUniverse'] if io else None,
                                        'outputUniverse':io['outputUniverse'] if io else None})
             if path == '/api/fixtures/control':
@@ -1028,6 +1107,76 @@ class Handler(BaseHTTPRequestHandler):
                     with LOCK:result['lampState']=copy.deepcopy(STATE.setdefault('beamLampStates',{}).get(fixture_id,{}))
                 MONITOR.wake_routing()
                 return self.reply(result)
+            if path == '/api/fixtures/fx-activate':
+                device_id=data.get('deviceId');fixture_id=data.get('fixtureId');enabled=data.get('enabled')
+                with LOCK:
+                    d=next((d for d in STATE['devices'] if d['id']==device_id and d['kind']=='artnet'),None)
+                    io=controller_io()
+                    fixture=next((f for f in effective_fixtures(STATE.get('fixtureMaps',{}).get(device_id,initial_patch(device_id)),io) if f['id']==fixture_id),None) if d else None
+                    if not d or not fixture:return self.reply({'error':'FX fixture not found'},404)
+                    if not io or io['outputUniverse'] is None:return self.reply({'error':'Controller output universe is unverified'},409)
+                    target=d['ip'];universe=io['outputUniverse']
+                try:result=MONITOR.set_fx_activation(target,fixture,enabled,universe)
+                except ValueError as exc:return self.reply({'error':str(exc)},409)
+                return self.reply(result)
+            if path == '/api/sequences':
+                device_id=data.get('deviceId');action=data.get('action','save')
+                with LOCK:
+                    d=next((d for d in STATE['devices'] if d['id']==device_id and d.get('kind')=='artnet'),None)
+                    if not d:return self.reply({'error':'Art-Net device not found'},404)
+                    io=controller_io();fixtures=effective_fixtures(STATE.get('fixtureMaps',{}).get(device_id,initial_patch(device_id)),io)
+                    fx=[f for f in fixtures if f.get('mappingPreset')=='fx-activate-effect-4ch']
+                    sequences=list(STATE.setdefault('sequences',{}).get(device_id,[]))
+                    samples=list(STATE.setdefault('sequenceSamples',{}).get(device_id,[]))
+                    if action=='save':
+                        sequence=validate_sequence(data.get('sequence'),sequences,fx)
+                        sequences=[sequence if item['id']==sequence['id'] else item for item in sequences]
+                        if not any(item['id']==sequence['id'] for item in sequences):sequences.append(sequence)
+                    elif action=='delete':
+                        sequence=next((item for item in sequences if item['id']==data.get('sequenceId')),None)
+                        if not sequence:return self.reply({'error':'Sequence not found'},404)
+                        if MONITOR.fx_sequence.get('active') and set(MONITOR.fx_sequence.get('fixtureIds',[])) & set(sequence['steps']):return self.reply({'error':'Stop the running FX sequence before deleting it'},409)
+                        sequences=[item for item in sequences if item['id']!=sequence['id']]
+                    elif action=='save-sample':
+                        sample=validate_sample(data.get('sample'),fx)
+                        samples=[sample if item['id']==sample['id'] else item for item in samples]
+                        if not any(item['id']==sample['id'] for item in samples):samples.append(sample)
+                    elif action=='add-sample':
+                        sample=next((item for item in samples if item['id']==data.get('sampleId')),None)
+                        if not sample:return self.reply({'error':'Sample preset not found'},404)
+                        sequence=validate_sequence(dict(sample,id='sequence-'+secrets.token_hex(8),armed=False),sequences,fx)
+                        sequences.append(sequence)
+                    elif action=='arm':
+                        sequence=next((item for item in sequences if item['id']==data.get('sequenceId')),None)
+                        if not sequence:return self.reply({'error':'Sequence not found'},404)
+                        if type(data.get('armed')) is not bool:raise ValueError('Invalid trigger state')
+                        sequence=dict(sequence,armed=data['armed'])
+                        sequences=[sequence if item['id']==sequence['id'] else item for item in sequences]
+                    else:raise ValueError('Invalid sequence action')
+                    STATE.setdefault('sequences',{})[device_id]=sequences
+                    STATE.setdefault('sequenceSamples',{})[device_id]=samples
+                    save()
+                    universe=io['outputUniverse'] if io else 1
+                    virtuals=sequence_virtual_fixtures(sequences,universe)
+                    MONITOR.wake_routing()
+                    return self.reply({'sequences':sequences,'samples':samples,'sequence':sequence if action in ('save','arm','add-sample') else None,
+                                       'virtualFixtures':virtuals})
+            if path == '/api/fixtures/sequence-test':
+                device_id=data.get('deviceId');fixture_ids=data.get('fixtureIds')
+                effect_seconds=data.get('effectSeconds');interval_seconds=data.get('intervalSeconds')
+                with LOCK:
+                    d=next((d for d in STATE['devices'] if d['id']==device_id and d['kind']=='artnet'),None)
+                    io=controller_io()
+                    fixtures=effective_fixtures(STATE.get('fixtureMaps',{}).get(device_id,initial_patch(device_id)),io) if d else []
+                    if not d:return self.reply({'error':'Art-Net device not found'},404)
+                    if not io or io['outputUniverse'] is None:return self.reply({'error':'Controller output universe is unverified'},409)
+                    target=d['ip'];universe=io['outputUniverse']
+                try:result=MONITOR.start_fx_sequence(target,fixtures,fixture_ids,universe,effect_seconds,interval_seconds)
+                except ValueError as exc:return self.reply({'error':str(exc)},409)
+                return self.reply({'sequence':result},202)
+            if path == '/api/fixtures/sequence-stop':
+                MONITOR.stop_fx_sequence()
+                return self.reply({'sequence':copy.deepcopy(MONITOR.fx_sequence)})
             if path == '/api/input-controls/fader':
                 with LOCK:
                     device_id=data.get('deviceId')
@@ -1045,11 +1194,11 @@ class Handler(BaseHTTPRequestHandler):
                 if type(enabled) is not bool:raise ValueError('Invalid blackout state')
                 if CONTROLLER is not None:
                     try:
-                        if enabled:CONTROLLER.stop()
-                        else:CONTROLLER.resume()
+                        result=CONTROLLER.stop() if enabled else CONTROLLER.resume()
                     except ValueError as exc:return self.reply({'error':str(exc)},409)
-                    result={'txMuted':MONITOR.tx_muted,'zeroSent':False,
-                            'message':'BLACKOUT · TX stopped without a zero frame' if MONITOR.tx_muted else 'BLACKOUT released'}
+                    if not isinstance(result,dict):result={'txMuted':MONITOR.tx_muted,'zeroSent':False}
+                    result.update(txMuted=MONITOR.tx_muted,
+                                  message='BLACKOUT · 512 zero values sent before TX stopped' if MONITOR.tx_muted and result.get('zeroSent') else 'BLACKOUT · TX stopped; zero frame not confirmed' if MONITOR.tx_muted else 'BLACKOUT released')
                     MONITOR.blackout_status=result
                     with LOCK:
                         STATE['txMuted']=MONITOR.tx_muted;STATE['blackoutStatus']=result;save()
@@ -1145,7 +1294,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    global PORT, STATE_FILE, HOST_IP, CONTROLLER
+    global PORT, STATE_FILE, HOST_IP, CONTROLLER, HTTP_SERVER
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--port', type=int, default=8765)
     parser.add_argument('--bind', default='0.0.0.0',
@@ -1175,6 +1324,7 @@ def main():
     ensure_beam230_patch(STATE,'00:00:c8:d8:a2:71',
                          live_io['inputUniverse'] if live_io else 0,
                          live_io['outputUniverse'] if live_io else 1)
+    ensure_fx_profile(STATE,'00:00:c8:d8:a2:71')
     save()
     MONITOR.blackout_status=({'txMuted':True,'zeroSent':False,
                               'message':'BLACKOUT · TX stopped without a zero frame'}
@@ -1199,8 +1349,10 @@ def main():
     else:
         print(MONITOR.error, flush=True)
     server = ThreadingHTTPServer((args.bind, PORT), Handler)
+    HTTP_SERVER=server
     print('SiteFlow Node → http://127.0.0.1:%s · LAN http://%s:%s' % (PORT, MONITOR.host_ip, PORT), flush=True)
-    if not args.no_browser:
+    restarted=bool(os.environ.pop('SITEFLOW_NODE_RESTARTED',None))
+    if not args.no_browser and not restarted:
         threading.Timer(1.0, webbrowser.open, args=('http://127.0.0.1:%s/' % PORT,)).start()
     if args.scan_on_start:
         start_scan('scan')
@@ -1236,7 +1388,8 @@ def main():
                 raw_fixtures=STATE.get('fixtureMaps',{}).get('00:00:c8:d8:a2:71')
                 wiz_devices=[d for d in STATE.get('devices',[]) if d.get('kind')=='wiz']
                 io=controller_io()
-                config_key=(id(raw_controls),id(raw_fixtures),
+                config_key=(id(raw_controls),id(raw_fixtures),id(STATE.get('ledFixtures')),
+                            id(STATE.get('sequences',{}).get('00:00:c8:d8:a2:71')),
                             io['inputUniverse'] if io else None,io['outputUniverse'] if io else None,
                             tuple((d.get('id'),d.get('ip'),d.get('name')) for d in wiz_devices))
                 ip=d['ip'] if d else None
@@ -1247,7 +1400,9 @@ def main():
                     raw_fixtures=raw_fixtures if raw_fixtures is not None else initial_patch('00:00:c8:d8:a2:71')
                     controls=effective_controls(raw_controls,io)
                     fixtures=effective_fixtures(raw_fixtures,io)
+                    fixtures+=led_virtuals(io['outputUniverse'] if io else 1)
                     fixtures+=wiz_virtual_fixtures(wiz_devices,io['outputUniverse'] if io else 1)
+                    fixtures+=sequence_virtual_fixtures(STATE.get('sequences',{}).get('00:00:c8:d8:a2:71',[]),io['outputUniverse'] if io else 1)
                     known={f['id'] for f in fixtures}
                     for control in controls:
                         control['targetFixtures']=[fid for fid in control.get('targetFixtures',[]) if fid in known]
@@ -1258,7 +1413,7 @@ def main():
                 source_ip,source_universe,received_at=trigger
                 active_sources={c['universe'] for c in controls if c.get('enabled')}
                 if source_ip!=ip or source_universe not in active_sources:continue
-                stale_deadline=received_at+15.1
+                stale_deadline=received_at+DESK_HOLD_SECONDS
             elif timed_out:
                 stale_deadline=None
             # A plain wake is caused by a control edit, a manual fader change,
@@ -1266,6 +1421,32 @@ def main():
             MONITOR.route_tick(ip,controls,fixtures,output_universe,midi_controls=MIDI_INPUTS.routing_controls('00:00:c8:d8:a2:71'))
     MONITOR.wake_routing()
     threading.Thread(target=routing_loop,daemon=True).start()
+
+    def fx_activation_loop():
+        """Keep CH1 active and sequence CH2 state on the confirmed output universe."""
+        while not MONITOR.stop_event.is_set():
+            with MONITOR.lock:active=bool(MONITOR.fx_activations)
+            if not active or MONITOR.tx_blocked():
+                MONITOR.stop_event.wait(.1);continue
+            try:
+                with LOCK:
+                    io=controller_io();d=next((x for x in STATE.get('devices',[]) if x.get('id')=='00:00:c8:d8:a2:71' and x.get('kind')=='artnet'),None)
+                    raw_controls=STATE.get('inputControls',{}).get('00:00:c8:d8:a2:71')
+                    raw_fixtures=STATE.get('fixtureMaps',{}).get('00:00:c8:d8:a2:71')
+                    wiz_devices=[x for x in STATE.get('devices',[]) if x.get('kind')=='wiz']
+                    controls=effective_controls(raw_controls if raw_controls is not None else initial_controls('00:00:c8:d8:a2:71'),io)
+                    fixtures=effective_fixtures(raw_fixtures if raw_fixtures is not None else initial_patch('00:00:c8:d8:a2:71'),io)
+                    fixtures+=led_virtuals(io['outputUniverse'] if io else 1)
+                    fixtures+=wiz_virtual_fixtures(wiz_devices,io['outputUniverse'] if io else 1)
+                    fixtures+=sequence_virtual_fixtures(STATE.get('sequences',{}).get('00:00:c8:d8:a2:71',[]),io['outputUniverse'] if io else 1)
+                    ip=d['ip'] if d else None;universe=io['outputUniverse'] if io else None
+                if ip and universe is not None:
+                    MONITOR.route_tick(ip,controls,fixtures,universe,midi_controls=MIDI_INPUTS.routing_controls('00:00:c8:d8:a2:71'))
+            except Exception as exc:
+                with MONITOR.lock:
+                    MONITOR.fx_sequence.update(error='FX output loop: '+str(exc))
+            MONITOR.stop_event.wait(1/30)
+    threading.Thread(target=fx_activation_loop,daemon=True).start()
 
     def wiz_output_loop():
         """Apply the newest selected WiZ target values off the Art-Net hot path."""
@@ -1365,7 +1546,7 @@ def main():
             MONITOR.stop_event.wait(.04)
     threading.Thread(target=led_output_loop,daemon=True).start()
     def controller_mode_loop():
-        while not MONITOR.stop_event.wait(30):CONTROLLER.refresh()
+        while not MONITOR.stop_event.wait(30 if CONTROLLER.state.get('connection')=='ONLINE' else 5):CONTROLLER.refresh()
     threading.Thread(target=controller_mode_loop,daemon=True).start()
     def artnet_status_loop():
         index=0
@@ -1387,6 +1568,10 @@ def main():
         MONITOR.close()
         if MONITOR.logger:MONITOR.logger.close()
         server.server_close()
+    if RESTART_REQUESTED:
+        os.environ['SITEFLOW_NODE_RESTARTED']='1'
+        script=str(Path(__file__).resolve())
+        os.execv(sys.executable,[sys.executable,script,*sys.argv[1:]])
 
 
 if __name__ == '__main__':

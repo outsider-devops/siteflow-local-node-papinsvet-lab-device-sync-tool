@@ -1,7 +1,7 @@
 import time,unittest
 from unittest.mock import Mock,patch
 from fixtures import initial_patch,fixture_test_plan,fixture_test_frame,PRESETS
-from artnet_monitor import ArtNetMonitor,parse_packet
+from artnet_monitor import ArtNetMonitor,parse_packet,timestamp
 
 class FixtureSequenceTests(unittest.TestCase):
     def test_frames_preserve_desk_and_only_test_one_fixture(self):
@@ -53,5 +53,18 @@ class FixtureSequenceTests(unittest.TestCase):
         with patch('artnet_monitor.threading.Thread') as worker:
             result=m.start_fixture_test('192.168.18.80',initial_patch('00:00:c8:d8:a2:71'))
             self.assertTrue(result['active'])
-            self.assertEqual(worker.call_args.kwargs['args'][3],[0]*192)
+            self.assertEqual(worker.call_args.kwargs['args'][3],[])
         m.socket.sendto.assert_not_called()
+
+    def test_test_uses_routed_output_not_raw_desk(self):
+        m=ArtNetMonitor();m.running=True;m.socket=Mock()
+        routed=[0]*204;routed[144]=42
+        m.tool_tx_by_ip['192.168.18.80']=dict(universe=1,values=routed,lastSentAt=timestamp())
+        m._fixture_baseline=Mock(return_value=[0]*144+[202]+[0]*47)
+        with patch('artnet_monitor.threading.Thread') as worker:
+            m.start_fixture_test('192.168.18.80',initial_patch('00:00:c8:d8:a2:71')[:1],output_universe=1)
+        baseline=worker.call_args.kwargs['args'][3]
+        self.assertEqual(baseline[144],42)
+        frame=fixture_test_frame(initial_patch('00:00:c8:d8:a2:71')[:1],baseline,
+                                 initial_patch('00:00:c8:d8:a2:71')[0],'white')
+        self.assertEqual((frame[144],frame[192]),(42,255))

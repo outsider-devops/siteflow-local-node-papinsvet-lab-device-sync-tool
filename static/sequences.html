@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><title>Sequences · SiteFlow Node</title><link rel="stylesheet" href="/app.css"><script src="/sequences.js" defer></script><script src="/restart.js" defer></script></head>
+<body>
+<header class="brand"><span class="brand-dot"></span><strong>.outsider</strong><span class="siteflow">SiteFlow</span><b>Node</b><span class="header-context">ART-NET SEQUENCES</span><span class="local-badge"><span></span>LOCAL ONLY</span></header>
+<main class="monitor-page sequence-page">
+ <a id="back-monitor" href="/artnet" class="back-to-devices">← Art-Net Signal Monitor</a>
+ <section class="title-row"><div><div class="place-identity"><img class="place-logo" src="/Papinsvet-logo.png" alt="Папин свет"><span>@papinsvet Lab</span></div><h1>Sequences</h1><p class="subtitle" id="sequence-device">Loading Art-Net patch…</p></div></section>
+ <section id="sequence-list-panel" class="sequence-list-panel">
+  <div class="sequence-list-heading"><div><h2>Saved sequences</h2><p>Choose a timeline to edit or run.</p></div><button id="sequence-new" class="primary" type="button">＋ New sequence</button></div>
+  <div id="sequence-list" class="sequence-list" aria-live="polite"></div>
+ </section>
+ <section id="sequence-builder" class="sequence-builder" hidden>
+  <div class="sequence-toolbar"><button id="sequence-back" type="button">← Sequences</button><label><span>Sequence</span><select id="sequence-select"></select></label><label class="sequence-name-field">Name<input id="sequence-name" maxlength="80"></label><label>Add sample<select id="sequence-sample-picker"><option value="">Add sample preset…</option></select></label><button id="sequence-add-sample" type="button">＋ Add sample</button><button id="sequence-save" class="primary" type="button">Save sequence</button><button id="sequence-save-sample" type="button">Save as sample</button><button id="sequence-delete" type="button" aria-label="Delete sequence">Delete</button></div>
+  <div class="sequence-heading"><div><h2>Timeline</h2><p id="sequence-count">0 steps</p></div><span class="sequence-chip">FX WALK · ONE SHOT</span></div>
+  <div class="sequence-settings"><label>Add fixture<select id="sequence-fixture-picker"><option value="">Add FX fixture step…</option></select></label><button id="sequence-add-step" type="button" disabled>＋ Add step</button><label class="sequence-trigger-mode">Trigger mode<select id="sequence-trigger-mode"><option value="oneshot">One shot</option><option value="loop">Loop while held</option></select><span>Loop releases on source drop or 10 s stale</span></label><label class="sequence-delay">Effect duration<input id="sequence-effect-duration" type="number" min="0.1" max="30" step="0.1"><span>seconds per step</span></label><label class="sequence-delay">Start interval<input id="sequence-start-interval" type="number" min="0" max="30" step="0.1"><span>seconds · 0 = together</span></label></div>
+  <ol id="sequence-timeline" class="sequence-timeline" aria-label="Sequence timeline"></ol>
+  <section class="sequence-timing-panel" aria-labelledby="sequence-timing-title"><div class="sequence-timing-heading"><strong id="sequence-timing-title">Timing preview</strong><span id="sequence-timing-summary"></span></div><div id="sequence-timing" class="sequence-timing" role="img" aria-label="Sequence effect timing"></div></section>
+  <div class="sequence-runtime-row"><button id="sequence-activate-all" type="button" hidden>FX Activate · OFF</button><label id="sequence-arm-label" class="sequence-arm-toggle" hidden><input id="sequence-arm" type="checkbox"><span class="sequence-switch"></span><strong>Arm input / MIDI trigger</strong></label><button id="sequence-test" class="primary" type="button" disabled>Test sequence</button><button id="sequence-stop" type="button" hidden>Stop sequence</button><span id="sequence-status" role="status">Loading saved sequences…</span></div>
+  <p class="artnet-note">Input mapping: FX Activate = 255 on / ≤245 off; Sequence Trigger = ≥100 starts once or loops while held, and re-arms below 100. A held one-shot never restarts by itself.</p>
+ </section>
+ <footer><span>Local Art-Net sequence setup <span class="footer-sep">/</span><code id="sequence-output">Output Universe —</code></span><span>Physical DMX output is not independently measured.</span></footer>
+</main>
+<div id="toast" class="toast" role="status" hidden></div>
+</body></html>

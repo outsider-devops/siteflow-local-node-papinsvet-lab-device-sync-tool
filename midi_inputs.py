@@ -1,5 +1,6 @@
 """Node-side MIDI sections: sixteen semantic faders, independent of browser tabs."""
 from copy import deepcopy
+import math
 import threading
 import time
 import uuid
@@ -46,7 +47,8 @@ def validate_section(data,existing,bindings,fixtures,source_id):
     if not isinstance(modes,dict):raise ValueError('Invalid fixture control presets')
     for fid,mode in modes.items():
         f=next((f for f in fixtures if f['id']==fid),None)
-        if fid not in targets or mode not in ('default','original','parled','pixel-fill') or mode=='parled' and f.get('mappingPreset')!='beam230-16ch' and fid!='led:matrix' or mode=='pixel-fill' and fid!='led:matrix':raise ValueError('Invalid target control preset')
+        if mode in ('once','loop') and not (f and f.get('virtualSequence')):raise ValueError('Once / Loop requires a sequence target')
+        if fid not in targets or mode not in ('default','original','parled','pixel-fill','screen','once','loop') or mode=='parled' and f.get('mappingPreset')!='beam230-16ch' and fid!='led:matrix' or mode in ('pixel-fill','screen') and fid!='led:matrix':raise ValueError('Invalid target control preset')
     slots=data.get('slots',[None]*16)
     if not isinstance(slots,list) or len(slots)!=16:raise ValueError('Use exactly 16 MIDI slots')
     clean=[]
@@ -76,7 +78,7 @@ class MIDIInputs:
                     binding=self.bindings.get(section['sourceId'],{}).get(key(slot['binding'])) if slot else None
                     stamp=(key(slot['binding']),slot.get('buttonMode'),slot.get('step')) if binding else None
                     previous=old[index] if old and old[index]['binding']==stamp else None
-                    initial=128 if section['faderFunctions'][index] in ('Pan','Tilt') else 0
+                    initial=128 if binding and 'relative' in binding.get('interpretation','').lower() and section['faderFunctions'][index] in ('Pan','Tilt') else 0
                     state=previous or dict(value=initial,changed=0,touched=False,pressed=False,manual=False,binding=stamp)
                     latest=self.last.get(key(binding)) if binding else None
                     if not previous and latest and binding['type']!='Note' and not binding.get('interpretation','').startswith('Button') and 'relative' not in binding.get('interpretation','').lower():
@@ -87,7 +89,7 @@ class MIDIInputs:
             self.values={sid:v for sid,v in self.values.items() if sid in self.sections}
             self.revision+=1
 
-    def ingest(self,events):
+    def ingest(self,events,controller=None):
         changed=False
         with self.lock:
             for event in events:
@@ -99,7 +101,8 @@ class MIDIInputs:
                     if binding is not None:
                         entry=dict(name=binding['name'],value=message['value'],last=now,layer=binding.get('templateLayer'))
                         self.activity.setdefault(source_id,{})[k]=entry
-                for sid,(_,section) in self.sections.items():
+                for sid,(parent,section) in self.sections.items():
+                    if controller is not None and parent!=controller:continue
                     binding=self.bindings.get(section['sourceId'],{}).get(k)
                     if binding is None:continue
                     for index,slot in enumerate(section['slots']):
@@ -125,6 +128,32 @@ class MIDIInputs:
                             state.update(value=value,changed=now,touched=True,manual=False);changed=True
             if changed:self.revision+=1
         return changed
+
+    def mouse(self,controller,source_id,control,kind,value):
+        with self.lock:
+            binding=self.bindings.get(source_id,{}).get(key(control))
+            if not binding:raise ValueError('MIDI element is not mapped')
+            if type(value) not in (int,float) or not math.isfinite(value):raise ValueError('Invalid mouse value')
+            relative='relative' in binding.get('interpretation','').lower()
+            button=binding['type']=='Note' or binding.get('interpretation','').startswith('Button')
+            if button:
+                if kind!='press' or value not in (0,1):raise ValueError('Use a button press or release')
+                raw=binding.get('onValue',127) if value else binding.get('offValue',0)
+            elif relative:
+                if kind!='delta' or int(value)!=value or not -63<=value<=63:raise ValueError('Encoder delta must be -63..63')
+                delta=int(value);mode=binding.get('interpretation','')
+                raw=64+delta if 'binary offset' in mode else ((64|abs(delta)) if delta<0 else delta) if 'signed bit' in mode else delta%128
+            else:
+                if kind!='value' or not 0<=value<=1:raise ValueError('Use a normalized value 0..1')
+                low=-8192 if binding['type']=='Pitch Bend' else binding.get('min',0);high=8191 if binding['type']=='Pitch Bend' else binding.get('max',127)
+                raw=round(low+value*(high-low))
+            channel=binding['channel']-1
+            if binding['type']=='Pitch Bend':
+                unsigned=raw+8192;data=[224|channel,unsigned&127,(unsigned>>7)&127]
+            else:data=[(144 if binding['type']=='Note' else 176)|channel,binding['number'],raw]
+            matched=sum(1 for parent,s in self.sections.values() if parent==controller and s['sourceId']==source_id and s['enabled'] for slot in s['slots'] if slot and key(slot['binding'])==key(binding))
+            self.ingest([dict(source=binding['source'],bytes=data,monotonic=time.monotonic())],controller)
+            return matched
 
     def manual(self,section_id,index,value):
         if type(index) is not int or not 1<=index<=16 or type(value) is not int or not 0<=value<=255:raise ValueError('Use fader 1–16 and a value 0–255')
@@ -184,6 +213,7 @@ def mapped_values(controls,fixtures,beam_converter=None):
             index=rule['input']-1;stamp=c['changed'][index]
             if not stamp:continue
             f=known[rule['fixtureId']];role=f['channels'][rule['channel']-1]['function']
+            if f.get('virtualSequence'):continue
             k=('virtual',f['id'],role) if f.get('virtualWiz') or f.get('virtualLED') else ('dmx',f['start']+rule['channel']-2)
             put(k,c['values'][index],stamp,c['id'])
         if beam_converter:
