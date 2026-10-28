@@ -77,7 +77,7 @@ def parse_packet(data):
                               inputData=bool(data[178 + i] & 128),
                               inputDisabled=bool(data[178 + i] & 8),
                               outputData=bool(data[182 + i] & 128)))
-        return dict(type='ArtPollReply', shortName=text(26, 44), longName=text(44, 108),
+        return dict(type='ArtPollReply', shortName=text(26, 44), longName=text(44, 108), bindIndex=data[211] if len(data)>211 else 0,
                     report=text(108, 172), firmwareCode=int.from_bytes(data[16:18], 'big'),
                     ports=ports)
     return dict(type='Other', opcode='0x%04x' % opcode)
@@ -206,7 +206,19 @@ class ArtNetMonitor:
                 self.counters['pollReplies'] += 1
                 if ip not in self.nodes and len(self.nodes) >= 32:
                     del self.nodes[min(self.nodes, key=lambda k: self.nodes[k]['_last'])]
-                self.nodes[ip] = dict(packet, sourceIp=ip, sourcePort=source_port, lastSeen=stamp, _last=t)
+                if packet['shortName'].startswith('SP801E_'):
+                    prior=self.nodes.get(ip,{})
+                    pages={index:page for index,page in prior.get('_pages',{}).items() if t-page['_last']<30}
+                    page_index=packet['bindIndex'] or min((p['outputUniverse'] for p in packet['ports'] if p['output']),default=0)
+                    pages[page_index]=dict(packet,_last=t)
+                    ports=[]
+                    for page_no,page in sorted(pages.items()):
+                        for port in page['ports']:
+                            ports.append(dict(port,port=len(ports)+1))
+                    self.nodes[ip] = dict(packet,ports=ports,bindPages=len(pages),sourceIp=ip,
+                                          sourcePort=source_port,lastSeen=stamp,_last=t,_pages=pages)
+                else:
+                    self.nodes[ip] = dict(packet,bindPages=1,sourceIp=ip,sourcePort=source_port,lastSeen=stamp,_last=t)
                 return
             if packet['type'] != 'ArtDmx':
                 self.counters['other'] += 1
@@ -382,6 +394,12 @@ class ArtNetMonitor:
                 controls=[c for c in controls if c and c.get('enabled')]
                 midi_controls=midi_controls or []
                 midi_values=midi_mapped_values(midi_controls,fixtures,lambda fid,values:self._beam_native_values('parled',values,self.fixture_controls.get(fid,{}).get('colorSlots',{})))
+                # Virtual LED fixtures are rendered by LEDRuntime and sent to
+                # their own pixel controller. Never treat their virtual slots
+                # as physical channels on the Art-Net/DMX2X output universe.
+                virtual_led_ids={f['id'] for f in fixtures if f.get('virtualLED')}
+                midi_values={key:value for key,value in midi_values.items()
+                             if not (key[0]=='virtual' and key[1] in virtual_led_ids)}
                 direct_controls=[c for c in controls if routing_mode(c)=='direct']
                 mapped_controls=[c for c in controls if routing_mode(c)=='mapped']
                 active_controls=direct_controls+mapped_controls
@@ -499,6 +517,9 @@ class ArtNetMonitor:
                         if override and (override['channel']!=source_channel or (override['anchor'] is not None and override['anchor']!=baseline[source_channel-1])):
                             self.manual_overrides.pop((c['id'],rule['input']),None);override=None
                         value=override['value'] if override else baseline[source_channel-1]
+                        # Matrix pixel values are consumed by LEDRuntime's
+                        # independent pixel-Art-Net sender, not the DMX2X.
+                        if f.get('virtualLED'):continue
                         if f.get('virtualSequence'):
                             function=f['channels'][rule['channel']-1]['function'].casefold()
                             changed=override.get('changed',0) if override else desk_changes.get(source_channel,0)
@@ -538,7 +559,9 @@ class ArtNetMonitor:
                                 htp_assignment(destination,value,beam_changed)
                 self._apply_sequence_inputs(ip,sequence_inputs,fixtures,universe)
                 has_sequence_target=any(by_fixture.get(fid,{}).get('virtualSequence') for c in mapped_controls+midi_controls for fid in c.get('targetFixtures',[]))
-                if not midi_values and any(c.get('targetFixtures') for c in mapped_controls) and not assignments and not wiz_assignments and not has_sequence_target:raise ValueError('Selected fixtures do not support assigned functions')
+                has_virtual_led_target=any(by_fixture.get(fid,{}).get('virtualLED')
+                                           for c in mapped_controls+midi_controls for fid in c.get('targetFixtures',[]))
+                if not midi_values and any(c.get('targetFixtures') for c in mapped_controls) and not assignments and not wiz_assignments and not has_sequence_target and not has_virtual_led_target:raise ValueError('Selected fixtures do not support assigned functions')
                 direct_owned=set(owned)
                 owned.update(assignments)
                 # Keep known FX activation/effect slots in every routed frame,

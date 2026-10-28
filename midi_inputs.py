@@ -48,7 +48,7 @@ def validate_section(data,existing,bindings,fixtures,source_id):
     for fid,mode in modes.items():
         f=next((f for f in fixtures if f['id']==fid),None)
         if mode in ('once','loop') and not (f and f.get('virtualSequence')):raise ValueError('Once / Loop requires a sequence target')
-        if fid not in targets or mode not in ('default','original','parled','pixel-fill','screen','once','loop') or mode=='parled' and f.get('mappingPreset')!='beam230-16ch' and fid!='led:matrix' or mode in ('pixel-fill','screen') and fid!='led:matrix':raise ValueError('Invalid target control preset')
+        if fid not in targets or mode not in ('default','original','parled','pixel-fill','screen','once','loop') or mode=='parled' and f.get('mappingPreset')!='beam230-16ch' and not f.get('virtualCanvas') or mode in ('pixel-fill','screen') and not f.get('virtualCanvas'):raise ValueError('Invalid target control preset')
     slots=data.get('slots',[None]*16)
     if not isinstance(slots,list) or len(slots)!=16:raise ValueError('Use exactly 16 MIDI slots')
     clean=[]

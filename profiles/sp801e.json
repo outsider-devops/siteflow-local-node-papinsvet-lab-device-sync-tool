@@ -1,0 +1,111 @@
+{
+  "schemaVersion": 1,
+  "profileId": "suntech.sp801e",
+  "profileType": "pixel-controller",
+  "manufacturer": "Suntech",
+  "model": "SP801E",
+  "displayName": "SP801E · 4-port Art-Net pixel controller",
+  "profileStatus": "documented-with-installation-gaps",
+  "documentation": {
+    "manual": "https://manuals.plus/m/625e81c75e4c6c8516f037aa48519375656e35677f909581e4915bba82891d71",
+    "manufacturerProductPage": "https://suntechlite.com/sp801e-wifi-artnet-led-controller/",
+    "verifiedOn": "2026-10-28",
+    "notes": [
+      "Manufacturer material confirms the product family and hardware capabilities, but does not document Art-Net universe-to-port assignment or detailed Art-Net packet mapping.",
+      "A reseller-hosted manual agrees on core hardware specs. Treat exact network behavior as pending verification against the installed unit and BanlanX settings."
+    ]
+  },
+  "hardware": {
+    "inputPower": {
+      "type": "DC",
+      "minVolts": 5,
+      "maxVolts": 24
+    },
+    "network": {
+      "wifiBandsGHz": [2.4],
+      "modes": ["AP", "STA"],
+      "bluetooth": "BluFi provisioning/configuration"
+    },
+    "pixelOutputs": {
+      "count": 4,
+      "labels": ["P1", "P2", "P3", "P4"],
+      "electricalType": "TTL data",
+      "dataEncoding": "single-wire RZ-coded pixel protocol",
+      "maxPixelsPerPort": 1024,
+      "maxPixelsTotalTheoretical": 4096,
+      "maxTotalNote": "4096 is the sum of four advertised per-port maxima; actual achievable count depends on pixel IC, refresh rate, wiring, power and firmware."
+    },
+    "pixelProtocol": {
+      "supportedFamily": "single-wire RZ-coded addressable LEDs",
+      "exactDriverIC": null,
+      "exactDriverICNote": "Select and verify the actual IC in BanlanX; documentation does not establish a specific IC such as WS2812B for this installation."
+    },
+    "pixelColorOrder": {
+      "supported": ["RGB", "RBG", "GRB", "GBR", "BRG", "BGR"],
+      "configuredHardwareOrder": null,
+      "note": "Order is configurable; confirm the installed strip/matrix order in BanlanX before treating a software order as physical truth."
+    },
+    "storage": {
+      "flashMB": 128,
+      "supportsSavedScenes": true,
+      "supportsOTA": true
+    }
+  },
+  "networkControl": {
+    "inputProtocols": ["Art-Net"],
+    "transport": "UDP",
+    "artnetPort": 6454,
+    "deviceAddress": null,
+    "universeAddressing": {
+      "perOutputConfigurable": null,
+      "autoIncrementBehavior": null,
+      "universeBaseConvention": null,
+      "note": "The available SP801E documentation says Art-Net-compatible but does not specify universe numbering, per-port universe assignment, pixel packing, or whether ports mirror or consume independent data. Read the installed controller/app configuration and verify by packet capture/output before enabling a patch."
+    }
+  },
+  "profileDefaults": {
+    "enabled": false,
+    "outputCount": 4,
+    "outputs": [
+      {"id": "P1", "enabled": false, "pixelCount": null, "pixelOrder": null, "artnetUniverses": []},
+      {"id": "P2", "enabled": false, "pixelCount": null, "pixelOrder": null, "artnetUniverses": []},
+      {"id": "P3", "enabled": false, "pixelCount": null, "pixelOrder": null, "artnetUniverses": []},
+      {"id": "P4", "enabled": false, "pixelCount": null, "pixelOrder": null, "artnetUniverses": []}
+    ],
+    "safeSetupRule": "Do not infer physical output routing or assign universes from port numbers. Require an explicit per-output patch read from the device/app or verified by an operator."
+  },
+  "siteDeployment": {
+    "deviceId": "led:matrix",
+    "name": "Vertical LED Matrix",
+    "controllerIp": "192.168.18.157",
+    "controllerIdentity": "User-identified as SP801E; IP reachability and exact firmware not independently confirmed in this profile task.",
+    "softwarePatch": {
+      "transport": "Art-Net",
+      "observedArtPollUniversesZeroBased": [16, 17, 18, 19, 20, 21, 22, 23],
+      "portUniversePairs": [[16, 17], [18, 19], [20, 21], [22, 23]],
+      "portPatchEvidence": "Two ArtPollReply bind pages from SP801E_F66880 report U16–U23; the previous working sender mirrored starts U16, U18, U20, U22. Full white on U16–U23 lit the connected strip. Physical port-by-port assignment still needs point testing.",
+      "universesZeroBased": [16, 18, 20, 22],
+      "universeDataBehavior": "The previous SiteFlow sender mirrored the same rendered payload at these four start Universes. The current sender requires a saved Canvas patch.",
+      "mirror": true,
+      "pixelCount": 200,
+      "pixelOrder": "BRG",
+      "brightnessLimit": 64,
+      "renderPreset": "pixel-fill",
+      "matrix": {
+        "canvasWidth": 5,
+        "canvasHeight": 40,
+        "pixelsPerVerticalStrip": 40,
+        "verticalStrips": 5,
+        "serpentine": true,
+        "fillAxis": "vertical",
+        "startCorner": "bottom-left"
+      },
+      "verification": "The controller IP and current software patch are known locally; 40×5 with bottom-left vertical serpentine is the requested installation canvas. These are not verified SP801E port/universe settings. Confirm actual BanlanX layout, pixel order, ports and universes before changing this deployment."
+    }
+  },
+  "controlSemantics": {
+    "virtualInputFunctions": ["Master", "Red", "Green", "Blue", "White", "Amber", "UV", "Strobe"],
+    "meaning": "SiteFlow virtual faders render pixel data for this controller; these are software-side controls, not native SP801E DMX channels.",
+    "amberAndUv": "Software color approximations in RGB output; they do not create physical amber or ultraviolet emitters unless the connected pixel hardware provides them."
+  }
+}

@@ -55,9 +55,9 @@ def validate_control(data,existing,fixtures):
     for fid,target_mode in target_modes.items():
         target=next((f for f in fixtures if f['id']==fid),None)
         if target_mode in ('once','loop') and not (target and target.get('virtualSequence')):raise ValueError('Once / Loop requires a sequence target')
-        if target_mode=='parled' and (not target or target.get('mappingPreset')!='beam230-16ch' and target.get('id')!='led:matrix'):raise ValueError('PAR LED mode requires Beam 230 or LED Matrix')
-        if target_mode=='pixel-fill' and (not target or target.get('id')!='led:matrix'):raise ValueError('Pixel Fill requires LED Matrix')
-        if target_mode=='screen' and (not target or target.get('id')!='led:matrix'):raise ValueError('Screen requires LED Matrix')
+        if target_mode=='parled' and (not target or target.get('mappingPreset')!='beam230-16ch' and not target.get('virtualCanvas')):raise ValueError('PAR LED mode requires Beam 230 or a Canvas')
+        if target_mode=='pixel-fill' and (not target or not target.get('virtualCanvas')):raise ValueError('Pixel Fill requires a Canvas')
+        if target_mode=='screen' and (not target or not target.get('virtualCanvas')):raise ValueError('Screen requires a Canvas')
     rules=semantic_rules(targets,fixtures,functions) if mode=='mapped' else data.get('rules',[]) if mode=='legacy' else []
     if not isinstance(rules,list) or len(rules)>1024:raise ValueError('Invalid rules')
     clean=[];used=set()

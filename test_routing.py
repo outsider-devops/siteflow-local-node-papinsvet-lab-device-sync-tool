@@ -144,6 +144,35 @@ class RoutingTests(unittest.TestCase):
   self.assertTrue(m.routing['active'])
   self.assertIn('led:matrix',m.routing['status'])
 
+ def test_virtual_led_input_never_leaks_to_artnet_dmx2x_output(self):
+  from led_controls import defaults,virtual_fixture
+  m=self.setup_monitor();base=[0]*192;base[112:120]=[255,120,0,0,0,0,0,0]
+  m._fixture_baseline=Mock(return_value=base)
+  matrix=virtual_fixture(defaults()[-1],1)
+  direct=dict(id='direct',enabled=True,routingMode='direct',universe=0,start=1,count=16,targetFixtures=[])
+  mapped=dict(id='matrix-input8',enabled=True,routingMode='mapped',universe=0,start=113,count=16,
+              targetFixtures=['led:matrix'],faderFunctions=['Master','Red','Green','Blue','White','Amber','UV','Strobe']+[None]*8)
+  m.route_tick('192.168.18.80',[direct,mapped],[matrix],1)
+  packet=parse_packet(m.socket.sendto.call_args.args[0])
+  self.assertEqual(packet['universe'],1)
+  self.assertEqual(packet['values'][:8],[0]*8)
+  self.assertIsNone(m.routing['error'])
+
+ def test_virtual_led_midi_values_stay_out_of_dmx2x_but_reach_led_runtime(self):
+  from led_controls import defaults,virtual_fixture,LEDRuntime
+  m=self.setup_monitor();m._fixture_baseline=Mock(return_value=[0]*192)
+  matrix_profile=defaults()[-1];matrix=virtual_fixture(matrix_profile,1)
+  direct=dict(id='direct',enabled=True,routingMode='direct',universe=0,start=1,count=16,targetFixtures=[])
+  midi=dict(id='midi-matrix',enabled=True,targetFixtures=['led:matrix'],
+            faderFunctions=['Master','Red']+[None]*14,values=[255,128]+[0]*14,
+            changed=[time.monotonic(),time.monotonic()]+[0]*14)
+  m.route_tick('192.168.18.80',[direct],[matrix],1,midi_controls=[midi])
+  packet=parse_packet(m.socket.sendto.call_args.args[0])
+  self.assertEqual(packet['values'][:8],[0]*8)
+  self.assertEqual(m.wiz_targets,{})
+  values=LEDRuntime().values([matrix_profile],[],m,'192.168.18.80',midi_controls=[midi])
+  self.assertEqual(values['led:matrix'][:2],[255,128])
+
  def test_removing_fx_activation_releases_previously_owned_channels(self):
   m=self.setup_monitor();baseline=[0]*512;m._fixture_baseline=Mock(return_value=baseline)
   fixture=dict(id='fx',name='FX',universe=1,start=289,mappingPreset='fx-activate-effect-4ch',

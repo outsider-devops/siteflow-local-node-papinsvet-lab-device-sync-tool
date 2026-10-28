@@ -2,7 +2,7 @@
 """SiteFlow local inventory, Art-Net input routing, and explicitly operated fixture controls."""
 from fixtures import initial_patch, validate_fixture, PRESETS, prepare_fixture_update, prepare_fixture_import, ensure_beam230_patch, ensure_fx_profile
 from input_controls import initial_controls, validate_control, FADER_FUNCTIONS
-from led_controls import defaults as led_defaults,virtual_fixture,validate_mapping,controller_frames,LEDRuntime
+from led_controls import defaults as led_defaults,default_canvases as led_default_canvases,validate_canvases as led_validate_canvases,virtual_fixture,validate_mapping,controller_frames,merge_pixel_frames_htp,complete_controller_frames,locator_frames,output_address_test_frames,output_map_from_frames,canvas_sweep_addresses,canvas_sweep_frame,LEDRuntime
 import argparse
 import concurrent.futures
 import copy
@@ -83,25 +83,247 @@ def midi_source_cards(controller_id):
 
 def import_led_registry():
     STATE.setdefault('ledFixtures',led_defaults())
+    STATE.setdefault('ledCanvases',led_default_canvases())
+    reserved_universes={}
+    canvas_ports={(c.get('controllerIp'),c.get('port')) for c in STATE['ledCanvases'] if isinstance(c,dict)}
+    for canvas in STATE['ledCanvases']:
+        canvas.pop('controlPreset',None)
+        canvas.setdefault('colorOrder',next((f.get('order','BRG') for f in STATE['ledFixtures'] if f.get('id')=='led:matrix'),'BRG'))
+        # One-time legacy migration for the original matrix canvas. Once a shape
+        # is saved, preserve its user-defined geometry across restarts.
+        if canvas.get('id')=='canvas:matrix-main' and not canvas.get('shape'):
+            canvas.update(shape='rectangle',width=5,height=40,pixelCount=200,order='serpentine',startCorner='bottom-left',scanAxis='vertical',firstUniverse=16,universeCount=2)
+        canvas.setdefault('shape','rectangle')
+        canvas['pixelCount']=(sum(abs(int(line['endPixel'])-int(line['startPixel']))+1 for line in canvas.get('lines',[]))
+                              if canvas.get('shape')=='irregular' and isinstance(canvas.get('lines'),list)
+                              else int(canvas.get('width',1))*int(canvas.get('height',1)))
+        needed=(int(canvas.get('startPixel',1))+canvas['pixelCount']-1)*3
+        needed=(needed+511)//512
+        ip=canvas.get('controllerIp','');port=int(canvas.get('port',1));occupied=reserved_universes.setdefault(ip,[])
+        first=canvas.get('firstUniverse')
+        same_port=[row for row in occupied if row[0]==port]
+        if same_port:first=same_port[0][1]
+        def other_port_overlap(candidate):
+            if any(row[0]!=port and candidate<=row[2] and candidate+needed-1>=row[1] for row in occupied):return True
+            for other_port in range(1,5):
+                if other_port==port or (ip,other_port) in canvas_ports:continue
+                first=16+(other_port-1)*2
+                if candidate<=first+1 and candidate+needed-1>=first:return True
+            return False
+        if type(first) is not int or first<0 or first+needed-1>32767 or canvas.get('universeCount')!=needed or other_port_overlap(first):
+            first=16+(max(1,port)-1)*2 if not same_port else same_port[0][1]
+            while other_port_overlap(first):first+=needed
+            canvas['firstUniverse']=first
+        canvas['universeCount']=needed
+        occupied.append((port,first,first+needed-1))
     for f in STATE['ledFixtures']:
         if f['id']=='led:matrix':
             f.setdefault('renderMode','pixel-fill');f.setdefault('reverse',False)
-            f.setdefault('matrixLayout',dict(pixelsPerRow=100,rows=2,serpentine=True,axis='vertical'))
+            layout=f.setdefault('matrixLayout',dict(pixelsPerRow=40,rows=5,serpentine=True,axis='vertical'))
+            if layout.get('pixelsPerRow')==100 and layout.get('rows')==2:
+                f['matrixLayout']=dict(pixelsPerRow=40,rows=5,serpentine=True,axis='vertical')
     for ip,name in [('192.168.18.3','LED Strips · P1–P4'),('192.168.18.157','Vertical LED Matrix')]:
-        d=next((d for d in STATE['devices'] if d['ip']==ip),None)
+        config_mac=next((f.get('controllerId') for f in STATE['ledFixtures']
+                         if f.get('controllerIp')==ip and re.fullmatch(r'(?:[0-9a-f]{2}:){5}[0-9a-f]{2}',str(f.get('controllerId','')),re.I)),None)
+        d=next((d for d in STATE['devices'] if config_mac and d.get('mac') and mac_normalize(d['mac'])==mac_normalize(config_mac)),None)
+        if not d:d=next((d for d in STATE['devices'] if d['ip']==ip),None)
         if not d:
-            d=identify(ip,'');d['name']=name;STATE['devices'].append(d)
+            # Keep a persistent record only when the saved configuration has a MAC.
+            # IP-only imports are not device identities and will reappear on discovery.
+            if not config_mac:continue
+            d=identify(ip,config_mac);d['name']=name;STATE['devices'].append(d)
+        if config_mac and not d.get('mac'):
+            old_id=d.get('id');d['id']=config_mac;d['mac']=config_mac
+            STATE['knownOrder']=[config_mac if item==old_id else item for item in STATE.get('knownOrder',[])]
         if d['name'] in ('LED ArtNet','Device 3'):d['name']=name
-        d.update(kind='artnet_led',role='Art-Net pixel controller',model='SP801E profile · hardware unverified')
+        d['configurationOnly']=True
+        d.setdefault('inventoryOrigin','imported-config')
+        # One-time cleanup of the old IP-based guess. An address in an imported
+        # patch is not evidence of either presence or hardware model.
+        if not d.get('profileImportReviewed'):
+            if d.get('controllerProfileSource') != 'user':
+                for key in ('controllerProfileId','controllerProfileSource','controllerProfileBase',
+                            'deviceProfile','deviceProfileSource','model'):
+                    d.pop(key,None)
+                d['controllerProfileSource']='imported-unverified'
+            d['profileImportReviewed']=True
+        if d.get('controllerProfileSource') not in ('user',):
+            d['role']='Saved LED configuration · hardware type unverified'
+            d['confidence']='Imported configuration'
+            d['kind']='artnet_led'  # internal association for saved LED routes only
+        d['present']=False  # startup is not a live network observation
         if not d.get('trackedAt'):
             d['tracked'] = False
-        d['nextStep']='Imported from rc6. Use LED Controls; output remains off until enabled or assigned to an input.'
+        d['nextStep']='Saved LED patch imported. This does not confirm that a controller is currently on the network or identify its model.'
     for d in STATE['devices']:
         if d.get('kind') == 'host' and not d.get('trackedAt'):
             d['tracked'] = False
+    # Bind LED profiles and canvas geometry to the stable network identity,
+    # not merely to an address that may later be reassigned.
+    for fixture in STATE['ledFixtures']:
+        device=next((d for d in STATE['devices'] if d.get('ip')==fixture.get('controllerIp') and d.get('mac')),None)
+        if not fixture.get('controllerId') and device:fixture['controllerId']=mac_normalize(device['mac'])
+        if not fixture.get('controllerId'):fixture['controllerId']='orphan:'+str(fixture.get('controllerIp','unknown'))
+        if fixture.get('controllerId'):
+            device=next((d for d in STATE['devices'] if d.get('mac') and mac_normalize(d['mac'])==fixture['controllerId']),None)
+            if device:fixture['controllerIp']=device['ip']
+    for canvas in STATE['ledCanvases']:
+        device=next((d for d in STATE['devices'] if d.get('ip')==canvas.get('controllerIp') and d.get('kind')=='artnet_led' and d.get('mac')),None)
+        if not canvas.get('controllerId') and device:canvas['controllerId']=mac_normalize(device['mac'])
+        if not canvas.get('controllerId'):canvas['controllerId']='orphan:'+str(canvas.get('controllerIp','unknown'))
+        if canvas.get('controllerId'):
+            device=next((d for d in STATE['devices'] if d.get('mac') and mac_normalize(d['mac'])==canvas['controllerId']),None)
+            if device:canvas['controllerIp']=device['ip']
+    # Migrate the old global matrix layout to explicit targets. The canvas owns
+    # physical wiring; the emulator only keeps a per-canvas display orientation.
+    for fixture in STATE['ledFixtures']:
+        if fixture.get('id')=='led:matrix' and not isinstance(fixture.get('canvasTargets'),list):
+            fixture['canvasTargets']=[dict(id=c['id'],rowOrientation=c.get('scanAxis','vertical'))
+                                      for c in STATE['ledCanvases'] if c.get('controllerId')==fixture.get('controllerId')]
+        if fixture.get('id')=='led:matrix':fixture.pop('matrixLayout',None)
+    # Reconcile saved Canvas starts to the controller's current per-port
+    # Art-Net map. A stale U25 on a P1 canvas otherwise physically lights P2.
+    for canvas in STATE['ledCanvases']:
+        owner=next((d for d in STATE['devices'] if d.get('mac') and mac_normalize(d['mac'])==canvas.get('controllerId')),None)
+        ranges=owner.get('artnetOutputRanges') if owner else None
+        port=int(canvas.get('port',0))
+        if not isinstance(ranges,list) or len(ranges)!=4 or not 1<=port<=4 or not ranges[port-1]:continue
+        first=ranges[port-1][0];needed=(int(canvas['startPixel'])+int(canvas['pixelCount'])-1)*3
+        needed=(needed+511)//512
+        if first+needed-1<=ranges[port-1][-1]:
+            canvas['firstUniverse']=first;canvas['universeCount']=needed
+    # Replace the old controller-wide virtual fixture with its concrete Canvas
+    # targets. Keep saved desk and MIDI assignments, modes and relative rules.
+    matrix=next((f for f in STATE['ledFixtures'] if f['id']=='led:matrix'),None)
+    if matrix:
+        selected={row.get('id') for row in matrix.get('canvasTargets',[]) if isinstance(row,dict)}
+        canvas_ids=[c['id'] for c in STATE['ledCanvases'] if c.get('controllerId')==matrix.get('controllerId')
+                    and c.get('enabled',True) and c['id'] in selected]
+        for bank in list(STATE.get('inputControls',{}).values())+list(STATE.get('midiInputSections',{}).values()):
+            for control in bank:
+                targets=control.get('targetFixtures',[])
+                if 'led:matrix' not in targets:continue
+                control['targetFixtures']=list(dict.fromkeys(fid for target in targets
+                    for fid in (canvas_ids if target=='led:matrix' else [target])))
+                modes=control.setdefault('targetModes',{});mode=modes.pop('led:matrix',None)
+                if mode:
+                    for fid in canvas_ids:modes.setdefault(fid,mode)
+                if isinstance(control.get('rules'),list):
+                    control['rules']=[dict(rule,fixtureId=fid) for rule in control['rules']
+                        for fid in (canvas_ids if rule.get('fixtureId')=='led:matrix' else [rule.get('fixtureId')])]
     save()
 
-def led_virtuals(universe=1):return [virtual_fixture(f,universe) for f in STATE.get('ledFixtures',[])]
+def sync_led_controller_address(device):
+    """Keep the stored endpoint current for profiles bound to this MAC."""
+    identity=mac_normalize(device.get('mac','')) if device.get('mac') else ''
+    if not identity:return
+    for fixture in STATE.get('ledFixtures',[]):
+        if fixture.get('controllerId')==identity:fixture['controllerIp']=device['ip']
+    for canvas in STATE.get('ledCanvases',[]):
+        if canvas.get('controllerId')==identity:canvas['controllerIp']=device['ip']
+
+def controller_profile_catalog():
+    profiles=[]
+    for path in sorted((Path(__file__).resolve().parent/'profiles').glob('*.json')):
+        try:
+            data=json.loads(path.read_text(encoding='utf-8'))
+            if data.get('profileType')=='pixel-controller':
+                profiles.append({key:data[key] for key in ('profileId','displayName','manufacturer','model','profileType') if key in data})
+        except (OSError,ValueError,TypeError):
+            continue
+    return profiles
+
+def apply_detected_profiles(device):
+    """Attach safe card/profile defaults only when the scan has positive identity evidence."""
+    if device.get('controllerProfileSource') == 'user-cleared':
+        # Respect an explicit unassignment across scans. The generic pixel-controller
+        # card type can remain, but stale discovery data must not restore a model.
+        device.pop('controllerProfileId', None)
+        device.pop('model', None)
+        device.pop('deviceProfile', None)
+        device.pop('deviceProfileSource', None)
+        return device
+    if device.get('configurationOnly') and not str(device.get('model') or '').strip():
+        return device
+    if device.get('deviceProfileSource') == 'user' or device.get('controllerProfileSource') in ('user','site-confirmed'):
+        return device
+    assigned_id = device.get('controllerProfileId')
+    if assigned_id:
+        assigned = next((p for p in controller_profile_catalog() if p.get('profileId') == assigned_id), None)
+        if assigned:
+            device.update(kind='artnet_led', model=assigned.get('model'), role='Art-Net pixel controller',
+                          deviceProfile='artnet_pixels', deviceProfileSource='detected')
+            return device
+    detected = {
+        'artnet':'artnet_dmx', 'artnet_led':'artnet_pixels', 'wiz':'wiz_light',
+        'midi':'midi_controller'
+    }.get(device.get('kind'))
+    if device.get('deviceClass') == 'midi':
+        detected = 'midi_controller'
+    if detected:
+        device['deviceProfile'] = detected
+        device['deviceProfileSource'] = 'detected'
+    model = str(device.get('model') or '').strip().casefold()
+    manufacturer = str(device.get('manufacturer') or '').strip().casefold()
+    if model:
+        for profile in controller_profile_catalog():
+            aliases = [str(x).casefold() for x in profile.get('modelAliases', [])]
+            expected_model = str(profile.get('model') or '').casefold()
+            expected_manufacturer = str(profile.get('manufacturer') or '').casefold()
+            if model in ([expected_model] + aliases) and (not expected_manufacturer or manufacturer == expected_manufacturer or device.get('kind') == 'artnet_led'):
+                device.update(controllerProfileId=profile['profileId'], controllerProfileSource='detected',
+                              kind='artnet_led', model=profile.get('model'), role='Art-Net pixel controller')
+                break
+    return device
+
+def apply_sp801e_artpoll_profile(device,node):
+    """Trust a fresh ArtPoll identity and MAC suffix, not a saved IP or vendor guess."""
+    if not node or node.get('type')!='ArtPollReply' or node.get('sourceIp')!=device.get('ip'):
+        return False
+    match=re.fullmatch(r'SP801E_([0-9A-Fa-f]{6})',str(node.get('shortName') or ''))
+    mac=mac_normalize(str(device.get('mac') or ''))
+    if not match or not mac.replace(':','').endswith(match.group(1).lower()):return False
+    outputs=[p.get('outputUniverse') for p in node.get('ports',[]) if p.get('output')]
+    if not outputs or len(outputs)%4 or len(outputs)>32 or any(type(u) is not int or not 0<=u<=32767 for u in outputs):return False
+    if outputs!=list(range(outputs[0],outputs[0]+len(outputs))):return False
+    per_port=len(outputs)//4
+    reported_ranges=[outputs[i*per_port:(i+1)*per_port] for i in range(4)]
+    manual_ranges=device.get('artnetOutputManualRanges')
+    output_ranges=manual_ranges if valid_sp801e_port_ranges(manual_ranges) else reported_ranges
+    changes=dict(kind='artnet_led',model='SP801E',role='Art-Net pixel controller',
+                 controllerProfileId='suntech.sp801e',controllerProfileSource='artpoll',
+                 deviceProfile='artnet_pixels',deviceProfileSource='detected',
+                 artnetOutputUniverses=[row[0] for row in output_ranges],artnetOutputRanges=output_ranges,
+                 artnetReportedUniverses=outputs,artnetReportedOutputRanges=reported_ranges,
+                 artnetPortMappingSource='Manual per-port map' if output_ranges is manual_ranges else 'ArtPoll range grouped across 4 physical outputs; optical check pending',
+                 configurationOnly=False)
+    changed=any(device.get(k)!=v for k,v in changes.items())
+    device.update(changes,present=True,reachability='Online',lastSeen=now(),neighborObservedAt=now(),
+                  confidence='ArtPollReply + MAC identity',access='Art-Net response')
+    return changed
+
+def valid_sp801e_port_ranges(ranges):
+    if not isinstance(ranges,list) or len(ranges)!=4:return False
+    previous=-1
+    for row in ranges:
+        if not isinstance(row,list) or not 1<=len(row)<=8:return False
+        if any(type(value) is not int or not 0<=value<=32767 for value in row):return False
+        if row!=list(range(row[0],row[0]+len(row))) or row[0]<=previous:return False
+        previous=row[-1]
+    return True
+
+def led_virtuals(universe=1):
+    fixtures=STATE.get('ledFixtures',[])
+    targets=[virtual_fixture(f,universe) for f in fixtures if f['id']!='led:matrix']
+    matrix=next((f for f in fixtures if f['id']=='led:matrix'),None)
+    if matrix:
+        controller=next((d for d in STATE.get('devices',[]) if d.get('mac') and mac_normalize(d['mac'])==matrix.get('controllerId')),None)
+        for canvas in STATE.get('ledCanvases',[]):
+            if canvas.get('controllerId')!=matrix.get('controllerId') or not canvas.get('enabled',True):continue
+            target=virtual_fixture(matrix,universe,canvas)
+            if controller:target['name']=f"{canvas['name']} · {controller['name']} · P{canvas['port']}"
+            targets.append(target)
+    return targets
 
 def controller_io():
     """Return the verified physical input/output patch without changing hardware."""
@@ -204,7 +426,7 @@ def identify(ip, mac):
         if needle in vendor.lower():
             kind = name
             break
-    return dict(id=mac or 'ip-' + ip, ip=ip, mac=mac, manufacturer=vendor,
+    result = dict(id=mac or 'ip-' + ip, ip=ip, mac=mac, manufacturer=vendor,
                 name='Device ' + ip.rsplit('.', 1)[1], kind=kind, interface='network', deviceClass='network', present=False,
                 model='', firmware='', vendorId='', role='Unidentified device',
                 zone='', notes='', tracked=False, confidence='Vendor hint',
@@ -213,6 +435,7 @@ def identify(ip, mac):
                 evidence=['MAC vendor identifies a module, not a finished product.'],
                 nextStep='Match the MAC address to a physical device or its vendor app.',
                 addedAt=now())
+    return apply_detected_profiles(result)
 
 
 def save():
@@ -401,15 +624,21 @@ def merge_result(result):
     with LOCK:
         current = next((d for d in STATE['devices'] if d['id'] == result['id']), None)
         if current:
-            for field in ('name', 'zone', 'notes', 'tracked', 'trackedAt', 'deviceProfile', 'role'):
+            for field in ('name', 'zone', 'notes', 'tracked', 'trackedAt', 'deviceProfile', 'role', 'controllerProfileId', 'controllerProfileSource', 'controllerProfileBase', 'configurationOnly', 'inventoryOrigin', 'profileImportReviewed'):
                 result[field] = current.get(field, result.get(field))
             current.update(result)
+            sync_led_controller_address(current)
+            apply_detected_profiles(current)
+            if current.get('controllerProfileId'):
+                profile = next((p for p in controller_profile_catalog() if p.get('profileId') == current['controllerProfileId']), None)
+                if profile:
+                    current.update(kind='artnet_led', model=profile.get('model'), role='Art-Net pixel controller')
             if result.get('kind')=='artnet' and result.get('transportMac'):
                 STATE['devices'][:]=[d for d in STATE['devices'] if d is current or not (d['ip']==current['ip'] and d.get('mac')==result['transportMac'] and d.get('kind')=='artnet')]
 
 
 def dedupe_unknown_placeholders():
-    """Drop exact duplicate network identities and empty unknown placeholders."""
+    """Deduplicate only records sharing a MAC; an IP alone is not identity."""
     by_ip = {}
     for device in STATE['devices']:
         if device.get('ip'):
@@ -424,23 +653,12 @@ def dedupe_unknown_placeholders():
         for duplicate in same_identity:
             if duplicate is canonical:
                 continue
-            for field in ('name', 'zone', 'notes', 'tracked', 'trackedAt', 'deviceProfile', 'role'):
+            for field in ('name', 'zone', 'notes', 'tracked', 'trackedAt', 'deviceProfile', 'role', 'controllerProfileId', 'controllerProfileSource', 'controllerProfileBase'):
                 value = duplicate.get(field)
                 if (field == 'tracked' and value) or (field != 'tracked' and value):
                     if field in ('tracked', 'trackedAt', 'deviceProfile', 'role') or not canonical.get(field):
                         canonical[field] = value
             removed.add(duplicate['id'])
-        for placeholder in rows:
-            if placeholder is canonical or placeholder['id'] in removed or placeholder.get('mac') or placeholder.get('kind') != 'unknown':
-                continue
-            for field in ('name', 'zone', 'notes', 'tracked', 'trackedAt', 'deviceProfile', 'role'):
-                value = placeholder.get(field)
-                if field in ('tracked', 'trackedAt', 'deviceProfile', 'role'):
-                    if (field == 'tracked' and value) or (field != 'tracked' and value):
-                        identified[field] = value
-                elif value and value != 'Device ' + placeholder['ip'].rsplit('.', 1)[-1]:
-                    identified[field] = value
-            removed.add(placeholder['id'])
     if removed:
         STATE['devices'][:] = [d for d in STATE['devices'] if d.get('id') not in removed]
         event('Merged duplicate unidentified network records by IP and MAC')
@@ -459,7 +677,7 @@ def update_local_inventory():
             result['present'] = bool(result.get('connected'))
             current = next((d for d in STATE['devices'] if d['id'] == result['id']), None)
             if current:
-                for field in ('name', 'zone', 'notes', 'tracked', 'trackedAt', 'deviceProfile', 'role'):
+                for field in ('name', 'zone', 'notes', 'tracked', 'trackedAt', 'deviceProfile', 'role', 'controllerProfileId', 'controllerProfileSource', 'controllerProfileBase'):
                     result[field] = current.get(field, result.get(field))
                 current.update(result)
             else:
@@ -501,18 +719,16 @@ def scan(mode='scan', device_id=None):
             with LOCK:
                 for ip, mac in found.items():
                     existing = next((d for d in STATE['devices'] if d['mac'] == mac), None)
-                    if not existing:
-                        existing = next((d for d in STATE['devices'] if d['ip']==ip and d.get('kind') in ('artnet','artnet_led')),None)
-                    if not existing:
-                        existing = next((d for d in STATE['devices'] if d['ip']==ip and not d.get('mac') and d.get('kind')=='unknown'),None)
                     if existing:
                         existing['ip'] = ip
                         existing['mac'] = mac
                         existing['present'] = True
                         existing['neighborObservedAt'] = now()
+                        sync_led_controller_address(existing)
                     else:
                         d = identify(ip, mac)
                         d['present'] = True
+                        d['inventoryOrigin']='network-discovery'
                         d['neighborObservedAt'] = now()
                         STATE['devices'].append(d)
                         event('Discovered ' + ip + ' · ' + d['manufacturer'])
@@ -521,6 +737,7 @@ def scan(mode='scan', device_id=None):
                     if valid_target(ip, subnet) and not any(d['ip'] == ip for d in STATE['devices']):
                         d = identify(ip, '')
                         d['present'] = True
+                        d['inventoryOrigin']='network-observation'
                         STATE['devices'].append(d)
         with LOCK:
             # A saved IP now owned by a different MAC must never be probed as the old identity.
@@ -528,8 +745,8 @@ def scan(mode='scan', device_id=None):
             present_ips = set(live) | found_ips | set(current_neighbors)
             for d in STATE['devices']:
                 if d.get('interface') not in ('usb', 'bluetooth'):
-                    d['present'] = d.get('kind') == 'host' or d['ip'] in present_ips
-            targets = [dict(d) for d in STATE['devices'] if d.get('interface') not in ('usb', 'bluetooth') and (device_id is None or d['id'] == device_id)]
+                    d['present'] = d.get('kind') == 'host' or (bool(d.get('mac')) and d['ip'] in present_ips) or (not d.get('mac') and d.get('inventoryOrigin')=='network-observation' and d['ip'] in live)
+            targets = [dict(d) for d in STATE['devices'] if d.get('interface') not in ('usb', 'bluetooth') and (bool(d.get('mac')) or d.get('kind') == 'host' or d.get('inventoryOrigin')=='network-observation') and (device_id is None or d['id'] == device_id)]
             conflicts = set()
             for d in targets:
                 actual = current_neighbors.get(d['ip'])
@@ -625,7 +842,8 @@ class Handler(BaseHTTPRequestHandler):
         path = urllib.parse.urlsplit(self.path).path
         if path == '/api/led':
             with LOCK:
-                return self.reply({'fixtures':STATE.get('ledFixtures',[]),'virtualFixtures':led_virtuals(),'runtime':LED.manual,'effectiveValues':LED.last_values,'status':LED.status,'txMuted':MONITOR.tx_muted})
+                controller=next((d for d in STATE.get('devices',[]) if mac_normalize(str(d.get('mac','')))=='20:e7:c8:f6:68:80'),None)
+                return self.reply({'fixtures':STATE.get('ledFixtures',[]),'canvases':STATE.get('ledCanvases',led_default_canvases()),'virtualFixtures':led_virtuals(),'runtime':LED.manual,'effectiveValues':LED.last_values,'status':LED.status,'outputMap':LED.output_map,'outputTestActive':LED.output_test is not None,'txMuted':MONITOR.tx_muted,'txBlocked':MONITOR.tx_blocked(),'controllerOnline':bool(controller and controller.get('reachability')=='Online'),'portMapSource':controller.get('artnetPortMappingSource') if controller else None})
         if path == '/api/wiz':
             device_id=urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get('device',[''])[0]
             with LOCK: device=next((dict(d) for d in STATE['devices'] if d['id']==device_id and d.get('kind')=='wiz'),None)
@@ -663,7 +881,9 @@ class Handler(BaseHTTPRequestHandler):
                 controller=next((d for d in STATE['devices'] if d['id']==controller_id and d.get('kind')=='artnet'),None)
                 if not controller:return self.reply({'error':'Art-Net device not found'},404)
                 source=next((d for d in STATE['devices'] if d['id']==source_id and (d.get('kind')=='midi' or d.get('deviceClass')=='midi')),None)
-                token=str(STATE.get('midiInputRevision',0))+'/'+str(source.get('midiRevision',0) if source else 0)
+                canvas_revision=tuple((c.get('id'),c.get('name'),c.get('port'),c.get('enabled',True))
+                                     for c in STATE.get('ledCanvases',[]) if c.get('controllerId')=='20:e7:c8:f6:68:80')
+                token=str(STATE.get('midiInputRevision',0))+'/'+str(source.get('midiRevision',0) if source else 0)+'/'+repr(canvas_revision)
                 result=dict(devices=midi_source_cards(controller_id),runtime=MIDI_INPUTS.snapshot(source_id) if source_id else None,
                             configRevision=token,txAllowed=not MONITOR.tx_blocked())
                 if source and params.get('revision',[''])[0]!=token:
@@ -759,11 +979,14 @@ class Handler(BaseHTTPRequestHandler):
                 snapshot = json.loads(json.dumps(STATE))
             # Mark old observations stale without pretending a cached address is live.
             for d in snapshot['devices']:
-                if d.get('reachability') == 'Online' and d.get('lastSeen'):
-                    age = (dt.datetime.now(dt.timezone.utc) - dt.datetime.fromisoformat(d['lastSeen'])).total_seconds()
+                observed = d.get('neighborObservedAt') or d.get('lastSeen')
+                if d.get('present') and observed:
+                    age = (dt.datetime.now(dt.timezone.utc) - dt.datetime.fromisoformat(observed)).total_seconds()
                     if age > 180:
-                        d['reachability'] = 'Stale'
-            snapshot.update(serverTime=now(), csrf=TOKEN, version='0.3.0', outputControl='mapped-fixture-tests-and-input6-forwarding')
+                        d['present'] = False
+                        if d.get('reachability') == 'Online':
+                            d['reachability'] = 'Stale'
+            snapshot.update(serverTime=now(), csrf=TOKEN, version='0.3.0', outputControl='mapped-fixture-tests-and-input6-forwarding', controllerProfiles=controller_profile_catalog())
             return self.reply(snapshot)
         if path == '/api/export':
             with LOCK:
@@ -952,7 +1175,7 @@ class Handler(BaseHTTPRequestHandler):
                 with LOCK:
                     items=STATE.get('ledFixtures',[]);old=next((f for f in items if f['id']==data.get('id')),None)
                     if not old:raise ValueError('LED fixture not found')
-                    new=validate_mapping(data,old)
+                    new=validate_mapping(data,old,STATE.get('ledCanvases',[]))
                     candidate=[new if f['id']==old['id'] else f for f in items]
                     virtuals=[virtual_fixture(f) for f in candidate]
                     controls=json.loads(json.dumps(STATE.get('inputControls',{})))
@@ -962,12 +1185,168 @@ class Handler(BaseHTTPRequestHandler):
                     STATE.update(ledFixtures=candidate,inputControls=controls);LED.manual.pop(old['id'],None);save()
                     MONITOR.wake_routing()
                     return self.reply({'fixtures':candidate})
+            if path == '/api/led/port-map':
+                controller_id=mac_normalize(str(data.get('controllerId','')))
+                ranges=data.get('ranges')
+                if not valid_sp801e_port_ranges(ranges):
+                    raise ValueError('Enter four ordered, non-overlapping contiguous Universe ranges (1–8 Universes per port).')
+                with LOCK:
+                    controller=next((d for d in STATE.get('devices',[]) if mac_normalize(str(d.get('mac','')))==controller_id and d.get('kind')=='artnet_led'),None)
+                    if not controller or controller.get('model')!='SP801E':
+                        raise ValueError('Select the confirmed SP801E controller by MAC address.')
+                    # Protect saved canvases from silently moving to a different port patch.
+                    for canvas in STATE.get('ledCanvases',[]):
+                        if mac_normalize(str(canvas.get('controllerId','')))!=controller_id:continue
+                        port=int(canvas.get('port',0));start=canvas.get('firstUniverse');count=canvas.get('universeCount',0)
+                        if not 1<=port<=4 or type(start) is not int or type(count) is not int:
+                            raise ValueError(f'Canvas “{canvas.get("name","(unnamed)")}” has an invalid port patch; edit or remove it before changing ranges.')
+                        row=ranges[port-1];end=start+count-1
+                        if start<row[0] or end>row[-1]:
+                            raise ValueError(f'New P{port} range U{row[0]}–U{row[-1]} would exclude canvas “{canvas.get("name","(unnamed)")}” (U{start}–U{end}).')
+                    controller['artnetOutputManualRanges']=copy.deepcopy(ranges)
+                    controller['artnetOutputRanges']=copy.deepcopy(ranges)
+                    controller['artnetOutputUniverses']=[row[0] for row in ranges]
+                    controller['artnetPortMappingSource']='Manual per-port map'
+                    save()
+                MONITOR.wake_routing()
+                return self.reply({'saved':True,'artnetOutputRanges':ranges,'artnetOutputUniverses':[row[0] for row in ranges],
+                                   'source':'Manual per-port map'})
+            if path == '/api/led/canvas-test':
+                if data.get('action')=='stop':
+                    canvas_id=str(data.get('canvasId',''))
+                    with LOCK:
+                        active=LED.output_test
+                        if not active or active.get('mode')!='canvas-sweep' or active.get('canvas',{}).get('id')!=canvas_id:
+                            return self.reply({'error':'That Canvas test is not running'},409)
+                        LED.output_test=None
+                        LED.status=dict(active=False,message='Canvas sweep stopped')
+                    return self.reply({'accepted':True,'stopped':True})
+                if MONITOR.tx_blocked():return self.reply({'error':'Art-Net TX is stopped; select SOFTWARE CONTROL and release BLACKOUT first'},409)
+                if not MONITOR.running:return self.reply({'error':'Art-Net sender is unavailable'},503)
+                controller_id=mac_normalize(str(data.get('controllerId','')))
+                with LOCK:
+                    controller=next((d for d in STATE.get('devices',[]) if mac_normalize(str(d.get('mac','')))==controller_id and d.get('kind')=='artnet_led'),None)
+                    ranges=controller.get('artnetOutputRanges') if controller else None
+                    if not controller or controller.get('reachability')!='Online' or not isinstance(ranges,list) or len(ranges)!=4 or any(not isinstance(row,list) or not row for row in ranges):
+                        return self.reply({'error':'Fresh controller output map is required'},409)
+                    if LED.output_test is not None:return self.reply({'error':'Another LED output test is already running'},409)
+                    canvas_id=str(data.get('canvasId',''))
+                    raw_canvas=data.get('canvas')
+                    if isinstance(raw_canvas,dict):
+                        if mac_normalize(str(raw_canvas.get('controllerId','')))!=controller_id:return self.reply({'error':'Canvas belongs to another controller'},400)
+                        raw_canvas=dict(raw_canvas,controllerIp=controller['ip'])
+                    else:
+                        raw_canvas=next((copy.deepcopy(c) for c in STATE.get('ledCanvases',[]) if c.get('id')==canvas_id and mac_normalize(str(c.get('controllerId','')))==controller_id),None)
+                    if not isinstance(raw_canvas,dict):return self.reply({'error':'Canvas settings were not found'},404)
+                    candidates=[copy.deepcopy(c) for c in STATE.get('ledCanvases',[]) if c.get('id')!=raw_canvas.get('id')]
+                    candidates.append(raw_canvas)
+                    validated=led_validate_canvases(candidates)
+                    canvas=next(c for c in validated if c['id']==raw_canvas.get('id'))
+                    port_ranges=ranges[canvas['port']-1]
+                    first=canvas['firstUniverse'];last=first+canvas['universeCount']-1
+                    reported=controller.get('artnetOutputUniverses')
+                    if first!=port_ranges[0] or not isinstance(reported,list) or len(reported)!=4 or first!=reported[canvas['port']-1] or last>port_ranges[-1]:
+                        return self.reply({'error':f'Canvas U{first}–U{last} does not match the current controller output range for P{canvas["port"]}'},409)
+                    addresses=canvas_sweep_addresses(canvas)
+                    if not addresses:return self.reply({'error':'Canvas has no mapped pixels'},400)
+                    base_order=next((f.get('order','BRG') for f in STATE.get('ledFixtures',[]) if f.get('controllerId')==controller_id),'BRG')
+                    orders=[next((c.get('colorOrder',base_order) for c in STATE.get('ledCanvases',[]) if c.get('controllerId')==controller_id and c.get('port')==port),base_order) for port in range(1,5)]
+                    orders[canvas['port']-1]=canvas['colorOrder']
+                    LED.locator=None
+                    LED.locator_suspended=True
+                    started=time.monotonic()
+                    LED.output_test=dict(mode='canvas-sweep',ip=controller['ip'],controllerId=controller_id,ranges=copy.deepcopy(ranges),orders=orders,
+                                         canvas=canvas,addresses=addresses,started=started,stepSeconds=.12,step=0,nextStepAt=started)
+                return self.reply({'accepted':True,'canvasId':canvas['id'],'pixels':canvas['pixelCount'],'passes':['top-to-bottom','left-to-right']})
+            if path == '/api/led/output-test':
+                if MONITOR.tx_blocked():return self.reply({'error':'Art-Net TX is stopped; select SOFTWARE CONTROL and release BLACKOUT first'},409)
+                if not MONITOR.running:return self.reply({'error':'Art-Net sender is unavailable'},503)
+                controller_id=mac_normalize(str(data.get('controllerId','')))
+                with LOCK:
+                    controller=next((d for d in STATE.get('devices',[]) if mac_normalize(str(d.get('mac','')))==controller_id and d.get('kind')=='artnet_led'),None)
+                    ranges=controller.get('artnetOutputRanges') if controller else None
+                    if not controller or controller.get('reachability')!='Online' or not isinstance(ranges,list) or len(ranges)!=4 or any(not isinstance(row,list) or not row for row in ranges):
+                        return self.reply({'error':'Fresh controller output map is required'},409)
+                    if LED.output_test is not None:return self.reply({'error':'Output test already running'},409)
+                    base_order=next((f.get('order','BRG') for f in STATE.get('ledFixtures',[]) if f.get('controllerId')==controller_id),'BRG')
+                    orders=[next((c.get('colorOrder',base_order) for c in STATE.get('ledCanvases',[]) if c.get('controllerId')==controller_id and c.get('port')==port),base_order) for port in range(1,5)]
+                    LED.locator=None
+                    LED.locator_suspended=True
+                    LED.output_test=dict(ip=controller['ip'],controllerId=controller_id,ranges=copy.deepcopy(ranges),orders=orders,started=time.monotonic())
+                return self.reply({'accepted':True,'durationSeconds':2,'phases':['white','red','off']})
+            if path == '/api/led/locator':
+                if data.get('active') is not True:
+                    with LOCK:
+                        LED.locator=None
+                    return self.reply({'accepted':True,'active':False})
+                if MONITOR.tx_blocked():return self.reply({'error':'Blackout · resume TX first'},409)
+                controller_id=mac_normalize(str(data.get('controllerId','')))
+                port=data.get('port');pixel=data.get('pixel');universe=data.get('firstUniverse');order=data.get('colorOrder','BRG')
+                if not re.fullmatch(r'(?:[0-9a-f]{2}:){5}[0-9a-f]{2}',controller_id):raise ValueError('Controller MAC identity is required')
+                if type(port) is not int or not 1<=port<=4 or type(pixel) is not int or not 1<=pixel<=1024:raise ValueError('Select port P1–P4 and pixel 1–1024')
+                if type(universe) is not int or not 0<=universe<=32767 or order not in ('RGB','RBG','GRB','GBR','BRG','BGR'):raise ValueError('Invalid locator Universe or color order')
+                with LOCK:
+                    controller=next((d for d in STATE.get('devices',[]) if d.get('mac') and mac_normalize(d['mac'])==controller_id and d.get('kind')=='artnet_led'),None)
+                    if not controller:raise ValueError('Known LED controller is not currently available')
+                    reported=controller.get('artnetOutputUniverses')
+                    if isinstance(reported,list) and len(reported)==4 and universe!=reported[port-1]:
+                        raise ValueError(f'Port P{port} starts at Art-Net Universe {reported[port-1]}')
+                    ranges=controller.get('artnetOutputRanges')
+                    if not isinstance(ranges,list) or len(ranges)!=4 or not ranges[port-1]:raise ValueError('Controller output map is unavailable')
+                    pixel_capacity=min(1024,len(ranges[port-1])*512//3)
+                    if pixel>pixel_capacity:raise ValueError(f'P{port} can address only {pixel_capacity} pixels with its reported Universe range (SP801E limit: 1024)')
+                    if LED.output_test is not None:raise ValueError('Output address test is running')
+                    if LED.locator_suspended and data.get('userAction') is not True:
+                        return self.reply({'error':'Address locator paused by LED control; move its slider to resume'},409)
+                    if data.get('userAction') is True:LED.locator_suspended=False
+                    LED.locator=dict(controllerId=controller_id,ip=controller['ip'],port=port,pixel=pixel,
+                                     firstUniverse=universe,reportedUniverses=[u for row in ranges for u in row],colorOrder=order,updated=time.monotonic())
+                return self.reply({'accepted':True,'active':True,'port':port,'pixel':pixel})
+            if path == '/api/led/canvases':
+                with LOCK:
+                    canvases=list(STATE.get('ledCanvases',led_default_canvases()))
+                    action=data.get('action','save')
+                    if action=='save':
+                        canvas=data.get('canvas')
+                        if not isinstance(canvas,dict):raise ValueError('Canvas settings are required')
+                        controller_id=mac_normalize(str(canvas.get('controllerId','')))
+                        controller=next((d for d in STATE.get('devices',[]) if d.get('mac') and mac_normalize(d['mac'])==controller_id),None)
+                        if not re.fullmatch(r'(?:[0-9a-f]{2}:){5}[0-9a-f]{2}',controller_id) or not controller or controller.get('kind')!='artnet_led':
+                            raise ValueError('Select a known Art-Net LED controller by its MAC identity')
+                        canvas['controllerId']=controller_id
+                        canvas['controllerIp']=controller['ip']
+                        canvases=[c for c in canvases if c.get('id')!=canvas.get('id')]+[canvas]
+                    elif action=='delete':
+                        canvas_id=data.get('id')
+                        if not any(c.get('id')==canvas_id for c in canvases):raise ValueError('Canvas not found')
+                        canvases=[c for c in canvases if c.get('id')!=canvas_id]
+                    else:raise ValueError('Invalid canvas action')
+                    canvases=led_validate_canvases(canvases)
+                    for saved_canvas in canvases:
+                        owner=next((d for d in STATE['devices'] if mac_normalize(str(d.get('mac') or ''))==saved_canvas['controllerId']),None)
+                        outputs=owner.get('artnetOutputUniverses') if owner else None
+                        ranges=owner.get('artnetOutputRanges') if owner else None
+                        if not isinstance(outputs,list) or len(outputs)!=4:continue
+                        port=saved_canvas['port'];start=saved_canvas['firstUniverse'];end=start+saved_canvas['universeCount']-1
+                        pixel_capacity=min(1024,len(ranges[port-1])*512//3) if isinstance(ranges,list) and len(ranges)==4 and ranges[port-1] else 0
+                        if saved_canvas['startPixel']+saved_canvas['pixelCount']-1>pixel_capacity:
+                            raise ValueError(f'Canvas exceeds P{port} capacity: {pixel_capacity} pixels from the current ArtPoll Universe allocation (maximum 1024)')
+                        if start!=outputs[port-1]:raise ValueError(f'Port P{port} is reported on Universe {outputs[port-1]}')
+                        if isinstance(ranges,list) and len(ranges)==4 and end>ranges[port-1][-1]:
+                            raise ValueError(f'Canvas exceeds the ArtPoll Universe range allocated to P{port}')
+                        if any(start<=u<=end for index,u in enumerate(outputs) if index+1!=port):
+                            raise ValueError('Canvas pixels cross into another reported output Universe; verify controller port mapping')
+                    STATE['ledCanvases']=canvases;save()
+                    return self.reply({'saved':True,'canvases':canvases,
+                                       'outputNote':'Canvas software output is assigned to its saved Universe range. Match that Universe start in the SP801E port settings; the controller itself is not reconfigured here.'})
             if path == '/api/led/control':
                 with LOCK:
                     f=next((f for f in STATE.get('ledFixtures',[]) if f['id']==data.get('id')),None)
                     if not f:raise ValueError('LED fixture not found')
                     if MONITOR.tx_muted:return self.reply({'error':'Blackout · resume TX first'},409)
                     LED.set_values(f,data.get('values'),data.get('enabled'))
+                    LED.locator=None
+                    LED.locator_suspended=True
                     return self.reply({'accepted':True})
             if path == '/api/midi-inputs/section':
                 controller_id=data.get('deviceId');source_id=data.get('sourceId');action=data.get('action','save')
@@ -1208,7 +1587,7 @@ class Handler(BaseHTTPRequestHandler):
                     with LOCK:
                         device=next((d for d in STATE['devices'] if d['kind']=='artnet'),None)
                     if not device:raise ValueError('Art-Net device not found')
-                    result=MONITOR.blackout(device['ip'],controller_frames(STATE.get('ledFixtures',[]),{f['id']:[0]*len(f['mapping']) for f in STATE.get('ledFixtures',[])},0))
+                    result=MONITOR.blackout(device['ip'],controller_frames(STATE.get('ledFixtures',[]),{f['id']:[0]*len(f['mapping']) for f in STATE.get('ledFixtures',[])},0,canvases=STATE.get('ledCanvases',[])))
                 else:
                     MONITOR.set_tx_muted(False)
                     result={'txMuted':False}
@@ -1234,7 +1613,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply({'test':result},202)
             if path == '/api/artnet/poll':
                 with LOCK:
-                    d = next((d for d in STATE['devices'] if d['id'] == data.get('deviceId') and d['kind'] == 'artnet'), None)
+                    d = next((d for d in STATE['devices'] if d['id'] == data.get('deviceId') and d['kind'] in ('artnet', 'artnet_led')), None)
                     if d is None:
                         return self.reply({'error': 'Art-Net device not found'}, 404)
                     target = d['ip']
@@ -1258,20 +1637,70 @@ class Handler(BaseHTTPRequestHandler):
                     if d is None:
                         return self.reply({'error': 'Device not found'}, 404)
                     changes = data.get('changes', {})
-                    if not isinstance(changes, dict) or any(k not in ('name', 'zone', 'notes', 'role', 'tracked', 'deviceProfile') for k in changes):
+                    if not isinstance(changes, dict) or any(k not in ('name', 'zone', 'notes', 'role', 'tracked', 'deviceProfile', 'controllerProfileId') for k in changes):
                         raise ValueError('Only inventory labels and tracking can be edited')
+                    if d.get('controllerProfileSource')=='artpoll':
+                        if 'controllerProfileId' in changes and changes['controllerProfileId']!=d.get('controllerProfileId'):
+                            raise ValueError('SP801E profile is fixed by the controller ArtPoll identity')
+                        if 'deviceProfile' in changes and changes['deviceProfile'] not in ('auto',d.get('deviceProfile')):
+                            raise ValueError('SP801E card type is fixed by the controller ArtPoll identity')
+                        changes={k:v for k,v in changes.items() if k not in ('controllerProfileId','deviceProfile')}
                     for k, v in changes.items():
                         if k == 'tracked':
                             if not isinstance(v, bool):
                                 raise ValueError('Invalid tracking value')
                         elif k == 'deviceProfile':
-                            if v not in ('auto','artnet_dmx','wiz_light','smart_switch','midi_controller','usb_device','bluetooth_device','camera','router','network_device'):
+                            if v not in ('auto','artnet_dmx','artnet_pixels','wiz_light','smart_switch','midi_controller','usb_device','bluetooth_device','camera','router','network_device'):
                                 raise ValueError('Invalid device profile')
+                        elif k == 'controllerProfileId':
+                            profile_ids = {p.get('profileId') for p in controller_profile_catalog()}
+                            if v not in ('', None) and v not in profile_ids:
+                                raise ValueError('Unknown controller profile')
                         elif not isinstance(v, str) or len(v) > (1000 if k == 'notes' else 120):
                             raise ValueError('Invalid label')
                         if k == 'name' and not v.strip():
                             raise ValueError('A device name is required')
+                    previous_controller_profile = d.get('controllerProfileId')
                     d.update({k: v.strip() if isinstance(v, str) else v for k, v in changes.items()})
+                    if 'deviceProfile' in changes:
+                        if changes['deviceProfile'] == 'auto':
+                            d.pop('deviceProfileSource', None)
+                        else:
+                            d['deviceProfileSource'] = 'user'
+                            d['configurationOnly']=False
+                    if 'controllerProfileId' in changes:
+                        profile_id = changes['controllerProfileId']
+                        if profile_id:
+                            selected_profile = next(p for p in controller_profile_catalog() if p.get('profileId') == profile_id)
+                            if previous_controller_profile != profile_id and not d.get('controllerProfileBase'):
+                                d['controllerProfileBase'] = {key:d.get(key) for key in ('kind','model','role')}
+                            d.update(controllerProfileId=profile_id, controllerProfileSource='user', kind='artnet_led',
+                                     model=selected_profile.get('model'), role='Art-Net pixel controller')
+                            d['configurationOnly']=False
+                        else:
+                            base = d.pop('controllerProfileBase', {})
+                            d['controllerProfileId'] = None
+                            d['controllerProfileSource'] = 'user-cleared'
+                            d.pop('deviceProfile', None)
+                            d.pop('deviceProfileSource', None)
+                            for key, value in base.items():
+                                if value is None:
+                                    d.pop(key, None)
+                                else:
+                                    d[key] = value
+                            # A manual clear is an explicit override of auto-detection.
+                            # Keep the controller family/card type, but do not resurrect
+                            # the model from cached discovery metadata on the next scan.
+                            d.pop('model', None)
+                    elif 'deviceProfile' in changes and changes['deviceProfile'] != 'auto' and d.get('controllerProfileId'):
+                        d.pop('controllerProfileId', None)
+                        d.pop('controllerProfileSource', None)
+                        base = d.pop('controllerProfileBase', {})
+                        for key, value in base.items():
+                            if value is None:
+                                d.pop(key, None)
+                            else:
+                                d[key] = value
                     if 'tracked' in changes:
                         d['trackedAt'] = now() if changes['tracked'] else None
                     event('Updated inventory: ' + d['name'])
@@ -1388,7 +1817,7 @@ def main():
                 raw_fixtures=STATE.get('fixtureMaps',{}).get('00:00:c8:d8:a2:71')
                 wiz_devices=[d for d in STATE.get('devices',[]) if d.get('kind')=='wiz']
                 io=controller_io()
-                config_key=(id(raw_controls),id(raw_fixtures),id(STATE.get('ledFixtures')),
+                config_key=(id(raw_controls),id(raw_fixtures),id(STATE.get('ledFixtures')),id(STATE.get('ledCanvases')),
                             id(STATE.get('sequences',{}).get('00:00:c8:d8:a2:71')),
                             io['inputUniverse'] if io else None,io['outputUniverse'] if io else None,
                             tuple((d.get('id'),d.get('ip'),d.get('name')) for d in wiz_devices))
@@ -1512,36 +1941,144 @@ def main():
 
     def led_output_loop():
         """Keep LED rendering on its own cadence so it cannot delay DMX routing."""
-        cached_key=None;leds=[];runtime_controls=[];ip=None
+        cached_key=None;leds=[];runtime_controls=[];ip=None;canvases=[];last_locator=None;output_ranges=[];output_orders=['BRG']*4;output_ip=None
         while not MONITOR.stop_event.is_set():
             with LOCK:
                 raw_leds=STATE.get('ledFixtures',[])
+                raw_canvases=STATE.get('ledCanvases',[])
                 raw_controls=STATE.get('inputControls',{}).get('00:00:c8:d8:a2:71')
                 io=controller_io()
                 d=next((d for d in STATE['devices'] if d['id']=='00:00:c8:d8:a2:71'),None)
                 ip=d['ip'] if d else None
-                key=(id(raw_leds),id(raw_controls),io['inputUniverse'] if io else None)
+                current_controllers=tuple(sorted((str(d.get('mac','')).lower(),d.get('ip'),d.get('kind'),tuple(tuple(row) for row in d.get('artnetOutputRanges',[]) if isinstance(row,list))) for d in STATE['devices'] if d.get('mac')))
+                key=(id(raw_leds),id(raw_canvases),id(raw_controls),io['inputUniverse'] if io else None,current_controllers)
                 if key!=cached_key:
-                    leds=json.loads(json.dumps(raw_leds))
+                    mac_devices={mac_normalize(d['mac']):d for d in STATE['devices'] if d.get('mac')}
+                    copied=json.loads(json.dumps(raw_leds));leds=[]
+                    for fixture in copied:
+                        identity=fixture.get('controllerId')
+                        if identity:
+                            bound=mac_devices.get(identity)
+                            if not bound:continue
+                            fixture['controllerIp']=bound['ip']
+                        leds.append(fixture)
+                    canvases=json.loads(json.dumps(raw_canvases))
+                    for canvas in canvases:
+                        bound=mac_devices.get(canvas.get('controllerId'))
+                        if bound:canvas['controllerIp']=bound['ip']
+                    pixel_controller=mac_devices.get('20:e7:c8:f6:68:80')
+                    output_ip=pixel_controller.get('ip') if pixel_controller else None
+                    output_ranges=json.loads(json.dumps(pixel_controller.get('artnetOutputRanges',[]))) if pixel_controller else []
+                    base_order=next((f.get('order','BRG') for f in leds if f.get('controllerId')=='20:e7:c8:f6:68:80'),'BRG')
+                    output_orders=[next((c.get('colorOrder',base_order) for c in canvases if c.get('controllerId')=='20:e7:c8:f6:68:80' and c.get('port')==port),base_order) for port in range(1,5)]
                     runtime_controls=effective_controls(raw_controls or initial_controls('00:00:c8:d8:a2:71'),io)
                     cached_key=key
-            if ip:
+            if ip or output_ip or LED.locator or LED.output_test:
                 if MONITOR.tx_blocked():
+                    with LOCK:LED.locator=None;LED.output_test=None;LED.output_map=None
+                    last_locator=None
                     LED.status=dict(active=False,message='BLACKOUT · TX stopped')
                 else:
                     try:
-                        values=LED.values(leds,runtime_controls,MONITOR,ip,midi_controls=MIDI_INPUTS.routing_controls('00:00:c8:d8:a2:71'))
+                        with LOCK:
+                            output_test=copy.deepcopy(LED.output_test)
+                            locator=copy.deepcopy(LED.locator)
+                            if locator and time.monotonic()-locator['updated']>1.5:
+                                LED.locator=None;locator=None
+                        if output_test:
+                            if output_test.get('mode')=='canvas-sweep':
+                                strips=output_test['addresses'];step_seconds=output_test.get('stepSeconds',.12);step=int(output_test.get('step',0));total=len(strips)
+                                wait_until=float(output_test.get('nextStepAt',output_test['started']))
+                                remaining=wait_until-time.monotonic()
+                                if remaining>0:
+                                    MONITOR.stop_event.wait(min(remaining,.04))
+                                    continue
+                                values=LED.values(leds,runtime_controls,MONITOR,ip,midi_controls=MIDI_INPUTS.routing_controls('00:00:c8:d8:a2:71'),canvases=canvases)
+                                base_frames=controller_frames(leds,values,time.monotonic(),LED.render_modes,canvases)
+                                canvas=output_test['canvas']
+                                if step>=total:
+                                    frames=canvas_sweep_frame(base_frames,output_test['ip'],output_test['ranges'],canvas,[],'off')
+                                    frames=complete_controller_frames(frames,output_test['ip'],output_test['ranges'])
+                                    if MONITOR.send_pixel_frames(frames,int(time.monotonic()*25)%255+1):
+                                        LED.output_map=dict(ports=output_map_from_frames(output_test['ip'],output_test['ranges'],output_test['orders'],frames),source='Canvas sweep · complete',sentAt=now())
+                                        with LOCK:LED.output_test=None
+                                        LED.status=dict(active=False,message='Canvas sweep complete · top-down, then left-right')
+                                    else:
+                                        with LOCK:LED.output_test=None
+                                        LED.status=dict(active=False,error='Canvas sweep stopped · Art-Net TX is unavailable')
+                                else:
+                                    strip_state=strips[step];strip=strip_state['addresses'];pass_index=strip_state['passIndex'];color='white' if step%2==0 else 'red'
+                                    frames=canvas_sweep_frame(base_frames,output_test['ip'],output_test['ranges'],canvas,strip,color)
+                                    frames=complete_controller_frames(frames,output_test['ip'],output_test['ranges'])
+                                    if MONITOR.send_pixel_frames(frames,int(time.monotonic()*25)%255+1):
+                                        LED.output_map=dict(ports=output_map_from_frames(output_test['ip'],output_test['ranges'],output_test['orders'],frames),source=f'Canvas sweep · {color.upper()}',sentAt=now())
+                                        LED.status=dict(active=True,message=f'Canvas sweep · {"top-down" if pass_index==0 else "left-right"} · {strip_state["step"]}/{strip_state["total"]}',
+                                                        controllers=[output_test['ip']],lastSentAt=now(),canvasTest=dict(canvasId=canvas['id'],address=strip[0] if strip else canvas['startPixel'],addresses=strip,color=color,passIndex=pass_index,step=step+1,total=total))
+                                        with LOCK:
+                                            if LED.output_test and LED.output_test.get('canvas',{}).get('id')==canvas['id']:
+                                                LED.output_test['step']=step+1
+                                                LED.output_test['nextStepAt']=time.monotonic()+step_seconds
+                                    else:
+                                        with LOCK:LED.output_test=None
+                                        LED.status=dict(active=False,error='Canvas sweep stopped · Art-Net TX is unavailable')
+                                last_locator=None
+                                MONITOR.stop_event.wait(.04)
+                                continue
+                            elapsed=time.monotonic()-output_test['started']
+                            color='white' if elapsed<1 else 'red' if elapsed<2 else 'off'
+                            if elapsed>=2.2:
+                                base_values=LED.values(leds,runtime_controls,MONITOR,ip,midi_controls=MIDI_INPUTS.routing_controls('00:00:c8:d8:a2:71'),canvases=canvases)
+                                frames={key:value for key,value in controller_frames(leds,base_values,time.monotonic(),LED.render_modes,canvases).items() if key[0]!=output_test['ip']}
+                                frames.update(output_address_test_frames(output_test['ip'],output_test['ranges'],output_test['orders'],'off'))
+                                if MONITOR.send_pixel_frames(frames,int(time.monotonic()*25)%255+1):
+                                    LED.output_map=dict(ports=output_map_from_frames(output_test['ip'],output_test['ranges'],output_test['orders'],frames),source='Output test · OFF',sentAt=now())
+                                    with LOCK:LED.output_test=None
+                                    LED.status=dict(active=False,message='Output test finished · white 1 s · red 1 s · off')
+                                else:
+                                    with LOCK:LED.output_test=None
+                                    LED.output_map=None
+                                    LED.status=dict(active=False,message='Output test stopped · TX became unavailable before OFF was sent')
+                            else:
+                                base_values=LED.values(leds,runtime_controls,MONITOR,ip,midi_controls=MIDI_INPUTS.routing_controls('00:00:c8:d8:a2:71'),canvases=canvases)
+                                frames={key:value for key,value in controller_frames(leds,base_values,time.monotonic(),LED.render_modes,canvases).items() if key[0]!=output_test['ip']}
+                                frames.update(output_address_test_frames(output_test['ip'],output_test['ranges'],output_test['orders'],color))
+                                if MONITOR.send_pixel_frames(frames,int(time.monotonic()*25)%255+1):
+                                    LED.output_map=dict(ports=output_map_from_frames(output_test['ip'],output_test['ranges'],output_test['orders'],frames),source='Output test · '+color.upper(),sentAt=now())
+                                    LED.status=dict(active=color!='off',message=f'Output test · {color.upper()}',controllers=[output_test['ip']],lastSentAt=now())
+                            last_locator=None
+                            MONITOR.stop_event.wait(.04)
+                            continue
+                        if locator:
+                            values=LED.values(leds,runtime_controls,MONITOR,ip,midi_controls=MIDI_INPUTS.routing_controls('00:00:c8:d8:a2:71'),canvases=canvases)
+                            frames=merge_pixel_frames_htp(controller_frames(leds,values,time.monotonic(),LED.render_modes,canvases),locator_frames(locator,last_locator))
+                            frames=complete_controller_frames(frames,locator['ip'],output_ranges)
+                            if MONITOR.send_pixel_frames(frames,int(time.monotonic()*25)%255+1):
+                                if output_ranges and output_ip==locator['ip']:
+                                    LED.output_map=dict(ports=output_map_from_frames(locator['ip'],output_ranges,output_orders,frames),source='Canvas + Address locator',sentAt=now())
+                                LED.status=dict(active=True,message=f'Address locator · P{locator["port"]} · U{locator["firstUniverse"]} · pixel {locator["pixel"]}',
+                                                controllers=[locator['ip']],lastSentAt=now())
+                                LED.last_active={f['controllerIp'] for f in leds if f['id'] in values}
+                            last_locator=locator
+                            MONITOR.stop_event.wait(.04)
+                            continue
+                        values=LED.values(leds,runtime_controls,MONITOR,ip,midi_controls=MIDI_INPUTS.routing_controls('00:00:c8:d8:a2:71'),canvases=canvases)
                         active_controllers={f['controllerIp'] for f in leds if f['id'] in values}
                         retired=LED.last_active-active_controllers
                         send_values=dict(values)
                         for fixture in leds:
                             if fixture['controllerIp'] in retired:send_values[fixture['id']]=[0]*len(fixture['mapping'])
-                        frames=controller_frames(leds,send_values,time.monotonic(),LED.render_modes)
+                        frames=controller_frames(leds,send_values,time.monotonic(),LED.render_modes,canvases)
+                        if last_locator:
+                            frames=merge_pixel_frames_htp(frames,locator_frames(None,last_locator))
+                            last_locator=None
+                        frames=complete_controller_frames(frames,output_ip,output_ranges)
                         if frames and MONITOR.send_pixel_frames(frames,int(time.monotonic()*25)%255+1):
+                            if output_ranges and output_ip:
+                                LED.output_map=dict(ports=output_map_from_frames(output_ip,output_ranges,output_orders,frames),source='Canvas / virtual control',sentAt=now())
                             LED.status=dict(active=True,controllers=sorted(active_controllers),lastSentAt=now())
                             LED.last_active=active_controllers
-                        elif MONITOR.tx_muted:LED.status=dict(active=False,message='Blackout · TX stopped')
-                        else:LED.status=dict(active=False,message='Output disabled')
+                        elif MONITOR.tx_muted:LED.status=dict(active=False,message='Blackout · TX stopped');LED.output_map=None
+                        else:LED.status=dict(active=False,message='No Canvas output configured' if not canvases else 'Waiting for LED control');LED.output_map=None
                     except (ValueError,OSError) as exc:LED.status=dict(active=False,error=str(exc))
             MONITOR.stop_event.wait(.04)
     threading.Thread(target=led_output_loop,daemon=True).start()
@@ -1559,6 +2096,14 @@ def main():
             for target in selected:
                 try:MONITOR.poll(target)
                 except (ValueError,OSError):pass
+            with MONITOR.lock:
+                replies={ip:copy.deepcopy(node) for ip,node in MONITOR.nodes.items()
+                         if time.monotonic()-node.get('_last',0)<30}
+            changed=False
+            with LOCK:
+                for device in STATE['devices']:
+                    if apply_sp801e_artpoll_profile(device,replies.get(device.get('ip'))):changed=True
+                if changed:save()
     threading.Thread(target=artnet_status_loop,daemon=True).start()
     try:
         server.serve_forever()

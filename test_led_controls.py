@@ -23,6 +23,16 @@ class LEDTests(unittest.TestCase):
   for u in [16,18,20,22]:
    self.assertEqual(frames[(f['controllerIp'],u)][:6],[0,0,64,0,0,64])
    self.assertEqual(frames[(f['controllerIp'],u+1)][88:],[0]*424)
+ def test_canvas_routing_uses_controller_mac_and_its_color_order(self):
+  f=defaults()[-1];values={f['id']:[255,255,0,0,0,0,0,0]}
+  canvas=dict(id='single-pixel',controllerId=f['controllerId'],controllerIp=f['controllerIp'],port=1,
+              startPixel=1,width=1,height=1,pixelCount=1,firstUniverse=40,universeCount=1,
+              order='linear',startCorner='bottom-left',scanAxis='horizontal',colorOrder='GRB',enabled=True)
+  frames=controller_frames([f],values,0,canvases=[canvas])
+  self.assertEqual(frames[(f['controllerIp'],40)][:3],[0,64,0])
+  wrong_controller=dict(canvas,controllerId='aa:bb:cc:dd:ee:ff',firstUniverse=41)
+  frames=controller_frames([f],values,0,canvases=[wrong_controller])
+  self.assertNotIn((f['controllerIp'],41),frames)
  def test_virtual_functions_and_editable_mapping(self):
   f=defaults()[0];f=validate_mapping({'mapping':['Red','Master','Strobe'],'limit':10},f)
   self.assertEqual(virtual_fixture(f)['channels'][0]['function'],'Red')
